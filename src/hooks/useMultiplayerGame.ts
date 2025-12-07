@@ -25,6 +25,16 @@ const initialGameState: GameState = {
   correctGuessers: []
 };
 
+// Shuffle array using Fisher-Yates
+const shuffleArray = <T,>(array: T[]): T[] => {
+  const shuffled = [...array];
+  for (let i = shuffled.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+  }
+  return shuffled;
+};
+
 export const useMultiplayerGame = () => {
   const [roomId, setRoomId] = useState<string | null>(null);
   const [roomCode, setRoomCode] = useState<string | null>(null);
@@ -42,7 +52,10 @@ export const useMultiplayerGame = () => {
   });
   const [wordOptions, setWordOptions] = useState<string[]>([]);
   const [isLoading, setIsLoading] = useState(false);
+  const [drawingOrder, setDrawingOrder] = useState<string[]>([]);
+  const [currentTurnIndex, setCurrentTurnIndex] = useState(0);
   const timerRef = useRef<NodeJS.Timeout | null>(null);
+  const joiningRef = useRef(false);
 
   // Call signaling server
   const callSignaling = async (action: string, params: Record<string, unknown>) => {
@@ -65,7 +78,6 @@ export const useMultiplayerGame = () => {
 
     console.log('[Multiplayer] Setting up realtime subscriptions for room:', roomId);
 
-    // Subscribe to players changes
     const playersChannel = supabase
       .channel(`room-players-${roomId}`)
       .on(
@@ -76,14 +88,12 @@ export const useMultiplayerGame = () => {
           table: 'room_players',
           filter: `room_id=eq.${roomId}`
         },
-        (payload) => {
-          console.log('[Multiplayer] Players change:', payload);
+        () => {
           fetchPlayers();
         }
       )
       .subscribe();
 
-    // Subscribe to messages changes
     const messagesChannel = supabase
       .channel(`room-messages-${roomId}`)
       .on(
@@ -95,7 +105,6 @@ export const useMultiplayerGame = () => {
           filter: `room_id=eq.${roomId}`
         },
         (payload) => {
-          console.log('[Multiplayer] New message:', payload);
           const newMsg = payload.new as {
             id: string;
             player_id: string;
@@ -119,7 +128,6 @@ export const useMultiplayerGame = () => {
       )
       .subscribe();
 
-    // Subscribe to room/game state changes
     const roomChannel = supabase
       .channel(`room-state-${roomId}`)
       .on(
@@ -131,7 +139,6 @@ export const useMultiplayerGame = () => {
           filter: `id=eq.${roomId}`
         },
         (payload) => {
-          console.log('[Multiplayer] Room state change:', payload);
           const newRoom = payload.new as { game_state: GameState; settings: RoomSettings };
           if (newRoom.game_state) {
             setGameState(newRoom.game_state);
@@ -143,19 +150,16 @@ export const useMultiplayerGame = () => {
       )
       .subscribe();
 
-    // Initial fetch
     fetchPlayers();
     fetchMessages();
 
     return () => {
-      console.log('[Multiplayer] Cleaning up subscriptions');
       supabase.removeChannel(playersChannel);
       supabase.removeChannel(messagesChannel);
       supabase.removeChannel(roomChannel);
     };
   }, [roomId]);
 
-  // Fetch players
   const fetchPlayers = async () => {
     if (!roomId) return;
     
@@ -185,7 +189,6 @@ export const useMultiplayerGame = () => {
     setPlayers(fetchedPlayers);
   };
 
-  // Fetch messages
   const fetchMessages = async () => {
     if (!roomId) return;
     
@@ -250,9 +253,17 @@ export const useMultiplayerGame = () => {
     }
   }, [settings]);
 
-  // Join room
+  // Join room - with duplicate prevention
   const joinRoom = useCallback(async (code: string, playerName: string, avatar: string) => {
+    // Prevent double-clicking
+    if (joiningRef.current) {
+      console.log('[Multiplayer] Join already in progress');
+      return false;
+    }
+    
+    joiningRef.current = true;
     setIsLoading(true);
+    
     try {
       const newPlayerId = generateId();
       
@@ -272,7 +283,6 @@ export const useMultiplayerGame = () => {
       setRoomCode(code.toUpperCase());
       setPlayerId(newPlayerId);
 
-      // Fetch room data
       const { data: room } = await supabase
         .from('rooms')
         .select('*')
@@ -292,6 +302,10 @@ export const useMultiplayerGame = () => {
       return false;
     } finally {
       setIsLoading(false);
+      // Reset after a short delay to prevent rapid re-clicks
+      setTimeout(() => {
+        joiningRef.current = false;
+      }, 1000);
     }
   }, []);
 
@@ -356,24 +370,40 @@ export const useMultiplayerGame = () => {
     });
   }, [roomId]);
 
-  // Start game
+  // Start game - with random drawing order
   const startGame = useCallback(async () => {
     if (players.length < 2 || !roomId) return;
     
+    // Shuffle players for random drawing order
+    const shuffledPlayerIds = shuffleArray(players.map(p => p.id));
+    setDrawingOrder(shuffledPlayerIds);
+    setCurrentTurnIndex(0);
+    
     const words = getRandomWords(3);
     setWordOptions(words);
+    
+    const firstDrawerId = shuffledPlayerIds[0];
     
     const newState: GameState = {
       ...gameState,
       phase: 'wordSelection',
       currentRound: 1,
-      currentDrawerId: players[0].id,
+      currentDrawerId: firstDrawerId,
       timeRemaining: gameState.drawTime,
       correctGuessers: []
     };
 
     setGameState(newState);
     await updateGameState(newState);
+    
+    // Send system message
+    await callSignaling('send-message', {
+      roomId,
+      playerId: 'system',
+      playerName: 'System',
+      content: `Round 1 started! ${players.find(p => p.id === firstDrawerId)?.name} is drawing first.`,
+      isSystemMessage: true
+    });
   }, [players, roomId, gameState, updateGameState]);
 
   // Select word
@@ -390,7 +420,7 @@ export const useMultiplayerGame = () => {
     await updateGameState(newState);
   }, [gameState, updateGameState]);
 
-  // Send message
+  // Send message with improved scoring
   const sendMessage = useCallback(async (content: string) => {
     if (!roomId || !playerId) return;
     
@@ -403,24 +433,28 @@ export const useMultiplayerGame = () => {
       content.toLowerCase().trim() === gameState.currentWord?.toLowerCase();
 
     if (isCorrectGuess) {
-      const timeBonus = Math.floor(gameState.timeRemaining / 10);
-      const basePoints = 100;
-      const points = basePoints + timeBonus * 10;
+      // Timer-based scoring: faster guess = more points
+      const timePercentage = gameState.timeRemaining / gameState.drawTime;
+      const basePoints = 50;
+      const timeBonus = Math.floor(timePercentage * 100); // 0-100 bonus based on time left
+      const orderBonus = Math.max(0, (players.length - gameState.correctGuessers.length - 1)) * 10; // Bonus for guessing early
+      const points = basePoints + timeBonus + orderBonus;
 
-      // Update player score
+      // Update guesser score
       await callSignaling('update-score', {
         roomId,
         playerId,
         score: player.score + points
       });
 
-      // Update drawer score
+      // Update drawer score (bonus per correct guesser)
       const drawer = players.find(p => p.id === gameState.currentDrawerId);
       if (drawer) {
+        const drawerBonus = 10 + Math.floor(timePercentage * 15);
         await callSignaling('update-score', {
           roomId,
           playerId: drawer.id,
-          score: drawer.score + 25
+          score: drawer.score + drawerBonus
         });
       }
 
@@ -459,42 +493,78 @@ export const useMultiplayerGame = () => {
     }
   }, [roomId, playerId, players, gameState, updateGameState]);
 
-  // Next turn
+  // Next turn - random order per round
   const nextTurn = useCallback(async () => {
-    const currentIndex = players.findIndex(p => p.id === gameState.currentDrawerId);
-    const nextIndex = (currentIndex + 1) % players.length;
-    const isNewRound = nextIndex === 0;
-    const newRound = isNewRound ? gameState.currentRound + 1 : gameState.currentRound;
-
-    if (newRound > gameState.totalRounds) {
+    const nextIndex = currentTurnIndex + 1;
+    const isRoundComplete = nextIndex >= drawingOrder.length;
+    
+    if (isRoundComplete) {
+      // All players have drawn this round
+      const newRound = gameState.currentRound + 1;
+      
+      if (newRound > gameState.totalRounds) {
+        // Game over
+        const newState: GameState = {
+          ...gameState,
+          phase: 'gameEnd',
+          currentWord: null,
+          wordHint: ''
+        };
+        setGameState(newState);
+        await updateGameState(newState);
+        return;
+      }
+      
+      // Start new round with reshuffled order
+      const newOrder = shuffleArray(players.map(p => p.id));
+      setDrawingOrder(newOrder);
+      setCurrentTurnIndex(0);
+      
+      const words = getRandomWords(3);
+      setWordOptions(words);
+      
       const newState: GameState = {
         ...gameState,
-        phase: 'gameEnd',
+        phase: 'wordSelection',
+        currentRound: newRound,
+        currentDrawerId: newOrder[0],
         currentWord: null,
-        wordHint: ''
+        wordHint: '',
+        timeRemaining: gameState.drawTime,
+        correctGuessers: []
       };
+
       setGameState(newState);
       await updateGameState(newState);
-      return;
+      
+      await callSignaling('send-message', {
+        roomId,
+        playerId: 'system',
+        playerName: 'System',
+        content: `Round ${newRound} started!`,
+        isSystemMessage: true
+      });
+    } else {
+      // Next player in current round
+      setCurrentTurnIndex(nextIndex);
+      
+      const words = getRandomWords(3);
+      setWordOptions(words);
+
+      const newState: GameState = {
+        ...gameState,
+        phase: 'wordSelection',
+        currentDrawerId: drawingOrder[nextIndex],
+        currentWord: null,
+        wordHint: '',
+        timeRemaining: gameState.drawTime,
+        correctGuessers: []
+      };
+
+      setGameState(newState);
+      await updateGameState(newState);
     }
-
-    const words = getRandomWords(3);
-    setWordOptions(words);
-
-    const newState: GameState = {
-      ...gameState,
-      phase: 'wordSelection',
-      currentRound: newRound,
-      currentDrawerId: players[nextIndex].id,
-      currentWord: null,
-      wordHint: '',
-      timeRemaining: gameState.drawTime,
-      correctGuessers: []
-    };
-
-    setGameState(newState);
-    await updateGameState(newState);
-  }, [players, gameState, updateGameState]);
+  }, [currentTurnIndex, drawingOrder, players, gameState, updateGameState, roomId]);
 
   // End round
   const endRound = useCallback(async () => {
@@ -524,7 +594,6 @@ export const useMultiplayerGame = () => {
   const resetGame = useCallback(async () => {
     if (!roomId) return;
 
-    // Reset all player scores
     for (const player of players) {
       await callSignaling('update-score', {
         roomId,
@@ -539,6 +608,8 @@ export const useMultiplayerGame = () => {
       totalRounds: settings.totalRounds
     };
 
+    setDrawingOrder([]);
+    setCurrentTurnIndex(0);
     setGameState(newState);
     await updateGameState(newState);
   }, [roomId, players, settings, updateGameState]);
@@ -561,6 +632,8 @@ export const useMultiplayerGame = () => {
     setMessages([]);
     setGameState(initialGameState);
     setWordOptions([]);
+    setDrawingOrder([]);
+    setCurrentTurnIndex(0);
   }, [roomId, playerId, players]);
 
   // Timer effect
@@ -585,7 +658,7 @@ export const useMultiplayerGame = () => {
 
         const newTime = prev.timeRemaining - 1;
         
-        // Auto reveal hints
+        // Auto reveal hints at 60% and 30% time
         let newHint = prev.wordHint;
         if (prev.currentWord && (newTime === Math.floor(prev.drawTime * 0.6) || 
             newTime === Math.floor(prev.drawTime * 0.3))) {
@@ -599,7 +672,6 @@ export const useMultiplayerGame = () => {
           wordHint: newHint
         };
 
-        // Update server
         updateGameState(newState);
 
         return newState;
@@ -633,8 +705,7 @@ export const useMultiplayerGame = () => {
   const currentPlayer = players.find(p => p.id === playerId);
   const isHost = currentPlayer?.isHost ?? false;
   const isDrawer = playerId === gameState.currentDrawerId;
-  const canStartGame = isHost && players.length >= 2 && 
-    players.every(p => p.isReady);
+  const canStartGame = isHost && players.length >= 2 && players.every(p => p.isReady);
 
   return {
     roomId,

@@ -85,6 +85,7 @@ const Index = () => {
   return (
     <>
       <GameScreen
+        roomId={roomId!}
         gameState={gameState}
         players={players}
         messages={messages}

@@ -104,7 +104,40 @@ serve(async (req) => {
           });
         }
 
-        // Check if player already exists
+        // Check if game already started
+        const gameState = room.game_state as { phase: string };
+        if (gameState.phase !== 'lobby') {
+          return new Response(JSON.stringify({ success: false, error: 'Game already in progress' }), {
+            status: 400,
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+          });
+        }
+
+        // Check if player with same name already exists (prevent duplicate joins)
+        const { data: existingPlayerByName } = await supabase
+          .from('room_players')
+          .select('*')
+          .eq('room_id', room.id)
+          .eq('player_name', playerName)
+          .maybeSingle();
+
+        if (existingPlayerByName) {
+          // Reconnect existing player with same name
+          await supabase
+            .from('room_players')
+            .update({ 
+              is_connected: true,
+              player_id: playerId // Update player_id for the reconnecting player
+            })
+            .eq('id', existingPlayerByName.id);
+          
+          console.log('[Signaling] Player reconnected:', playerName);
+          return new Response(JSON.stringify({ success: true, roomId: room.id, reconnected: true }), {
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+          });
+        }
+
+        // Check if player_id already exists
         const { data: existingPlayer } = await supabase
           .from('room_players')
           .select('*')
@@ -118,33 +151,51 @@ serve(async (req) => {
             .from('room_players')
             .update({ is_connected: true })
             .eq('id', existingPlayer.id);
-        } else {
-          // Add new player
-          const { error: playerError } = await supabase
-            .from('room_players')
-            .insert({
-              room_id: room.id,
-              player_id: playerId,
-              player_name: playerName,
-              avatar: playerAvatar,
-              is_host: false,
-              is_ready: false
-            });
-
-          if (playerError) {
-            console.error('[Signaling] Player join error:', playerError);
-            throw playerError;
-          }
-
-          // Add system message
-          await supabase.from('room_messages').insert({
-            room_id: room.id,
-            player_id: 'system',
-            player_name: 'System',
-            content: `${playerName} joined the game!`,
-            is_system_message: true
+            
+          return new Response(JSON.stringify({ success: true, roomId: room.id, reconnected: true }), {
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' }
           });
         }
+
+        // Check max players
+        const { data: playerCount } = await supabase
+          .from('room_players')
+          .select('id', { count: 'exact' })
+          .eq('room_id', room.id);
+        
+        const roomSettings = room.settings as { maxPlayers: number };
+        if (playerCount && playerCount.length >= roomSettings.maxPlayers) {
+          return new Response(JSON.stringify({ success: false, error: 'Room is full' }), {
+            status: 400,
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+          });
+        }
+
+        // Add new player
+        const { error: playerError } = await supabase
+          .from('room_players')
+          .insert({
+            room_id: room.id,
+            player_id: playerId,
+            player_name: playerName,
+            avatar: playerAvatar,
+            is_host: false,
+            is_ready: false
+          });
+
+        if (playerError) {
+          console.error('[Signaling] Player join error:', playerError);
+          throw playerError;
+        }
+
+        // Add system message
+        await supabase.from('room_messages').insert({
+          room_id: room.id,
+          player_id: 'system',
+          player_name: 'System',
+          content: `${playerName} joined the game!`,
+          is_system_message: true
+        });
 
         console.log('[Signaling] Player joined:', playerName, 'to room:', code);
         return new Response(JSON.stringify({ success: true, roomId: room.id }), {
@@ -235,14 +286,15 @@ serve(async (req) => {
       }
 
       case 'send-message': {
-        const { roomId, playerId, playerName, content, isCorrectGuess } = params;
+        const { roomId, playerId, playerName, content, isCorrectGuess, isSystemMessage } = params;
         
         await supabase.from('room_messages').insert({
           room_id: roomId,
           player_id: playerId,
           player_name: playerName,
           content,
-          is_correct_guess: isCorrectGuess || false
+          is_correct_guess: isCorrectGuess || false,
+          is_system_message: isSystemMessage || false
         });
 
         return new Response(JSON.stringify({ success: true }), {

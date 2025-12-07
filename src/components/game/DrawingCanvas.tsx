@@ -1,17 +1,18 @@
 import { useRef, useEffect, useState, useCallback } from 'react';
 import { DrawingData, DRAWING_COLORS, BRUSH_SIZES } from '@/types/game';
 import { Button } from '@/components/ui/button';
-import { Paintbrush, Eraser, Undo2, Redo2, Trash2, PaintBucket } from 'lucide-react';
+import { Paintbrush, Eraser, Undo2, Redo2, Trash2, PaintBucket, Download } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 interface DrawingCanvasProps {
   isDrawer: boolean;
   onDrawingData?: (data: DrawingData) => void;
+  receivedDrawingData?: DrawingData | null;
 }
 
-const MAX_HISTORY = 20; // Limit history to prevent memory issues
+const MAX_HISTORY = 20;
 
-export const DrawingCanvas = ({ isDrawer, onDrawingData }: DrawingCanvasProps) => {
+export const DrawingCanvas = ({ isDrawer, onDrawingData, receivedDrawingData }: DrawingCanvasProps) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const [isDrawing, setIsDrawing] = useState(false);
@@ -23,7 +24,7 @@ export const DrawingCanvas = ({ isDrawer, onDrawingData }: DrawingCanvasProps) =
   const isInitializedRef = useRef(false);
   const lastPointRef = useRef<{ x: number; y: number } | null>(null);
 
-  // Save canvas state as data URL (more memory efficient than ImageData)
+  // Save canvas state as data URL
   const saveToHistory = useCallback(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -32,7 +33,6 @@ export const DrawingCanvas = ({ isDrawer, onDrawingData }: DrawingCanvasProps) =
     
     setHistoryStack(prev => {
       const newHistory = [...prev.slice(0, historyIndex + 1), dataUrl];
-      // Limit history size
       if (newHistory.length > MAX_HISTORY) {
         newHistory.shift();
         return newHistory;
@@ -42,7 +42,7 @@ export const DrawingCanvas = ({ isDrawer, onDrawingData }: DrawingCanvasProps) =
     setHistoryIndex(prev => Math.min(prev + 1, MAX_HISTORY - 1));
   }, [historyIndex]);
 
-  // Initialize canvas - only runs once
+  // Initialize canvas
   useEffect(() => {
     if (isInitializedRef.current) return;
     
@@ -62,7 +62,6 @@ export const DrawingCanvas = ({ isDrawer, onDrawingData }: DrawingCanvasProps) =
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
 
-    // Save initial state
     const dataUrl = canvas.toDataURL('image/png');
     setHistoryStack([dataUrl]);
     setHistoryIndex(0);
@@ -80,19 +79,16 @@ export const DrawingCanvas = ({ isDrawer, onDrawingData }: DrawingCanvasProps) =
       const ctx = canvas.getContext('2d');
       if (!ctx) return;
 
-      // Save current drawing
       const tempCanvas = document.createElement('canvas');
       tempCanvas.width = canvas.width;
       tempCanvas.height = canvas.height;
       const tempCtx = tempCanvas.getContext('2d');
       tempCtx?.drawImage(canvas, 0, 0);
 
-      // Resize
       const rect = container.getBoundingClientRect();
       canvas.width = rect.width || 800;
       canvas.height = rect.height || 600;
 
-      // Restore drawing
       ctx.fillStyle = '#FFFFFF';
       ctx.fillRect(0, 0, canvas.width, canvas.height);
       ctx.drawImage(tempCanvas, 0, 0);
@@ -101,6 +97,57 @@ export const DrawingCanvas = ({ isDrawer, onDrawingData }: DrawingCanvasProps) =
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
   }, []);
+
+  // Handle received drawing data (for non-drawers)
+  useEffect(() => {
+    if (!receivedDrawingData || isDrawer) return;
+
+    const canvas = canvasRef.current;
+    const ctx = canvas?.getContext('2d');
+    if (!canvas || !ctx) return;
+
+    const data = receivedDrawingData;
+
+    switch (data.type) {
+      case 'start':
+        lastPointRef.current = { x: data.x!, y: data.y! };
+        // Draw initial point
+        ctx.beginPath();
+        ctx.arc(data.x!, data.y!, (data.brushSize || 5) / 2, 0, Math.PI * 2);
+        ctx.fillStyle = data.color || '#000000';
+        ctx.fill();
+        break;
+
+      case 'draw':
+        if (lastPointRef.current && data.x !== undefined && data.y !== undefined) {
+          ctx.beginPath();
+          ctx.strokeStyle = data.color || '#000000';
+          ctx.lineWidth = data.brushSize || 5;
+          ctx.lineCap = 'round';
+          ctx.lineJoin = 'round';
+          ctx.moveTo(lastPointRef.current.x, lastPointRef.current.y);
+          ctx.lineTo(data.x, data.y);
+          ctx.stroke();
+          lastPointRef.current = { x: data.x, y: data.y };
+        }
+        break;
+
+      case 'end':
+        lastPointRef.current = null;
+        break;
+
+      case 'clear':
+        ctx.fillStyle = '#FFFFFF';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        break;
+
+      case 'fill':
+        if (data.x !== undefined && data.y !== undefined && data.color) {
+          optimizedFloodFill(Math.floor(data.x), Math.floor(data.y), data.color);
+        }
+        break;
+    }
+  }, [receivedDrawingData, isDrawer]);
 
   const getCoordinates = (e: React.MouseEvent | React.TouchEvent) => {
     const canvas = canvasRef.current;
@@ -135,16 +182,21 @@ export const DrawingCanvas = ({ isDrawer, onDrawingData }: DrawingCanvasProps) =
     if (!ctx || !canvas) return;
 
     if (tool === 'fill') {
-      // Use optimized flood fill
       optimizedFloodFill(Math.floor(x), Math.floor(y), color);
       saveToHistory();
+      onDrawingData?.({
+        type: 'fill',
+        x,
+        y,
+        color,
+        timestamp: Date.now()
+      });
       return;
     }
 
     setIsDrawing(true);
     lastPointRef.current = { x, y };
     
-    // Draw a single point for click without drag
     ctx.beginPath();
     ctx.arc(x, y, brushSize / 2, 0, Math.PI * 2);
     ctx.fillStyle = tool === 'eraser' ? '#FFFFFF' : color;
@@ -178,14 +230,16 @@ export const DrawingCanvas = ({ isDrawer, onDrawingData }: DrawingCanvasProps) =
     ctx.lineJoin = 'round';
     ctx.stroke();
 
-    lastPointRef.current = { x, y };
-
     onDrawingData?.({
       type: 'draw',
       x,
       y,
+      color: tool === 'eraser' ? '#FFFFFF' : color,
+      brushSize,
       timestamp: Date.now()
     });
+
+    lastPointRef.current = { x, y };
   };
 
   const stopDrawing = () => {
@@ -200,7 +254,7 @@ export const DrawingCanvas = ({ isDrawer, onDrawingData }: DrawingCanvasProps) =
     }
   };
 
-  // Optimized flood fill using scanline algorithm
+  // Optimized flood fill
   const optimizedFloodFill = (startX: number, startY: number, fillColor: string) => {
     const canvas = canvasRef.current;
     const ctx = canvas?.getContext('2d');
@@ -226,12 +280,12 @@ export const DrawingCanvas = ({ isDrawer, onDrawingData }: DrawingCanvasProps) =
       return [data[i], data[i + 1], data[i + 2], data[i + 3]];
     };
 
-    const setPixel = (x: number, y: number, color: number[]) => {
+    const setPixel = (x: number, y: number, colorArr: number[]) => {
       const i = (y * width + x) * 4;
-      data[i] = color[0];
-      data[i + 1] = color[1];
-      data[i + 2] = color[2];
-      data[i + 3] = color[3];
+      data[i] = colorArr[0];
+      data[i + 1] = colorArr[1];
+      data[i + 2] = colorArr[2];
+      data[i + 3] = colorArr[3];
     };
 
     const colorsMatch = (a: number[], b: number[], tolerance = 32) => {
@@ -318,6 +372,16 @@ export const DrawingCanvas = ({ isDrawer, onDrawingData }: DrawingCanvasProps) =
     onDrawingData?.({ type: 'clear', timestamp: Date.now() });
   };
 
+  const downloadCanvas = () => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    const link = document.createElement('a');
+    link.download = 'drawparty-drawing.png';
+    link.href = canvas.toDataURL();
+    link.click();
+  };
+
   return (
     <div className="flex flex-col gap-4 h-full">
       <div 
@@ -341,7 +405,7 @@ export const DrawingCanvas = ({ isDrawer, onDrawingData }: DrawingCanvasProps) =
         {!isDrawer && (
           <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
             <div className="bg-foreground/10 backdrop-blur-sm px-6 py-3 rounded-full">
-              <p className="text-foreground/60 font-medium">Waiting for the drawing...</p>
+              <p className="text-foreground/60 font-medium">Watch the drawing...</p>
             </div>
           </div>
         )}
@@ -440,6 +504,13 @@ export const DrawingCanvas = ({ isDrawer, onDrawingData }: DrawingCanvasProps) =
               onClick={clearCanvas}
             >
               <Trash2 className="w-5 h-5" />
+            </Button>
+            <Button
+              variant="outline"
+              size="icon"
+              onClick={downloadCanvas}
+            >
+              <Download className="w-5 h-5" />
             </Button>
           </div>
         </div>

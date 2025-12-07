@@ -1,12 +1,15 @@
-import { GameState, Player, ChatMessage } from '@/types/game';
+import { useState, useCallback, useEffect } from 'react';
+import { GameState, Player, ChatMessage, DrawingData } from '@/types/game';
 import { DrawingCanvas } from '@/components/game/DrawingCanvas';
 import { ChatBox } from '@/components/game/ChatBox';
 import { PlayerCard } from '@/components/game/PlayerCard';
 import { GameHeader } from '@/components/game/GameHeader';
 import { WordSelection } from '@/components/game/WordSelection';
 import { Scoreboard } from '@/components/game/Scoreboard';
+import { useDrawingSync } from '@/hooks/useDrawingSync';
 
 interface GameScreenProps {
+  roomId: string;
   gameState: GameState;
   players: Player[];
   messages: ChatMessage[];
@@ -27,6 +30,7 @@ interface GameScreenProps {
 }
 
 export const GameScreen = ({
+  roomId,
   gameState,
   players,
   messages,
@@ -46,6 +50,31 @@ export const GameScreen = ({
   onPlayAgain
 }: GameScreenProps) => {
   const chatDisabled = isDrawer || gameState.correctGuessers.includes(currentPlayer?.id || '');
+  const [receivedDrawingData, setReceivedDrawingData] = useState<DrawingData | null>(null);
+
+  // Drawing sync hook
+  const { sendDrawingData } = useDrawingSync(
+    roomId,
+    isDrawer,
+    useCallback((data: DrawingData) => {
+      setReceivedDrawingData(data);
+    }, [])
+  );
+
+  // Handle drawing data from canvas
+  const handleDrawingData = useCallback((data: DrawingData) => {
+    if (isDrawer) {
+      sendDrawingData(data);
+    }
+  }, [isDrawer, sendDrawingData]);
+
+  // Clear received data after processing
+  useEffect(() => {
+    if (receivedDrawingData) {
+      const timer = setTimeout(() => setReceivedDrawingData(null), 50);
+      return () => clearTimeout(timer);
+    }
+  }, [receivedDrawingData]);
 
   return (
     <div className="min-h-screen flex flex-col bg-background">
@@ -66,7 +95,11 @@ export const GameScreen = ({
       <div className="flex-1 container mx-auto p-4 grid lg:grid-cols-[1fr_300px] gap-4">
         {/* Canvas area */}
         <div className="flex flex-col min-h-[500px]">
-          <DrawingCanvas isDrawer={isDrawer} />
+          <DrawingCanvas 
+            isDrawer={isDrawer} 
+            onDrawingData={handleDrawingData}
+            receivedDrawingData={receivedDrawingData}
+          />
         </div>
 
         {/* Sidebar */}
