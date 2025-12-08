@@ -21,6 +21,8 @@ const Index = () => {
     isDrawer,
     canStartGame,
     isLoading,
+    isStartingGame,
+    isTogglingReady,
     createRoom,
     joinRoom,
     toggleReady,
@@ -71,6 +73,8 @@ const Index = () => {
           isHost={isHost}
           canStartGame={canStartGame}
           isLoading={isLoading}
+          isStartingGame={isStartingGame}
+          isTogglingReady={isTogglingReady}
           onSettingsChange={setSettings}
           onToggleReady={toggleReady}
           onStartGame={startGame}

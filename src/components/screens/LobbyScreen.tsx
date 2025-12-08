@@ -21,6 +21,8 @@ interface LobbyScreenProps {
   isHost: boolean;
   canStartGame: boolean;
   isLoading?: boolean;
+  isStartingGame?: boolean;
+  isTogglingReady?: boolean;
   onSettingsChange: (settings: RoomSettings) => void;
   onToggleReady: () => void;
   onStartGame: () => void;
@@ -37,6 +39,8 @@ export const LobbyScreen = ({
   isHost,
   canStartGame,
   isLoading,
+  isStartingGame,
+  isTogglingReady,
   onSettingsChange,
   onToggleReady,
   onStartGame,
@@ -326,23 +330,26 @@ export const LobbyScreen = ({
                   variant={currentPlayer?.isReady ? 'secondary' : 'default'}
                   className="flex-1"
                   onClick={onToggleReady}
-                  disabled={isLoading}
+                  disabled={isLoading || isTogglingReady}
                 >
+                  {isTogglingReady ? (
+                    <Loader2 className="w-5 h-5 mr-2 animate-spin" />
+                  ) : null}
                   {currentPlayer?.isReady ? 'Not Ready' : 'Ready!'}
                 </Button>
               )}
               {isHost && (
                 <Button
                   className="flex-1"
-                  disabled={!canStartGame || isLoading}
+                  disabled={!canStartGame || isLoading || isStartingGame}
                   onClick={onStartGame}
                 >
-                  {isLoading ? (
+                  {isStartingGame ? (
                     <Loader2 className="w-5 h-5 mr-2 animate-spin" />
                   ) : (
                     <Play className="w-5 h-5 mr-2" />
                   )}
-                  Start Game
+                  {isStartingGame ? 'Starting...' : 'Start Game'}
                 </Button>
               )}
             </div>

@@ -99,15 +99,32 @@ export const useMultiplayerGame = () => {
   const [settings, setSettings] = useState<RoomSettings>(defaultSettings);
   const [wordOptions, setWordOptions] = useState<string[]>([]);
   const [isLoading, setIsLoading] = useState(false);
+  const [isStartingGame, setIsStartingGame] = useState(false);
+  const [isTogglingReady, setIsTogglingReady] = useState(false);
+  const [isSendingMessage, setIsSendingMessage] = useState(false);
   const [drawingOrder, setDrawingOrder] = useState<string[]>([]);
   const [currentTurnIndex, setCurrentTurnIndex] = useState(0);
   const timerRef = useRef<NodeJS.Timeout | null>(null);
   const joiningRef = useRef(false);
   const hasAttemptedRejoin = useRef(false);
+  const lastActionTime = useRef<Record<string, number>>({});
+
+  // Debounce helper - prevents rapid repeated calls
+  const shouldDebounce = (action: string, debounceMs: number = 500): boolean => {
+    const now = Date.now();
+    const lastTime = lastActionTime.current[action] || 0;
+    if (now - lastTime < debounceMs) {
+      console.log(`[Signaling] Debouncing ${action}`);
+      return true;
+    }
+    lastActionTime.current[action] = now;
+    return false;
+  };
 
   // Call signaling server with session token
   const callSignaling = async (action: string, params: Record<string, unknown>) => {
     try {
+      console.log(`[Signaling] Calling ${action}`, { hasToken: !!sessionToken });
       const { data, error } = await supabase.functions.invoke('signaling', {
         body: { 
           action, 
@@ -116,10 +133,21 @@ export const useMultiplayerGame = () => {
         }
       });
       
-      if (error) throw error;
+      if (error) {
+        console.error(`[Signaling] ${action} error:`, error);
+        throw error;
+      }
+      
+      if (data && !data.success && data.error) {
+        console.error(`[Signaling] ${action} failed:`, data.error);
+        toast.error(data.error);
+        return data;
+      }
+      
       return data;
     } catch (err) {
       console.error(`[Signaling] ${action} error:`, err);
+      toast.error(`Action failed: ${action}`);
       throw err;
     }
   };
@@ -297,11 +325,15 @@ export const useMultiplayerGame = () => {
     try {
       const newPlayerId = generateId();
       
+      // Use current settings state directly
+      const roomSettings = { ...settings };
+      console.log('[Multiplayer] Creating room with settings:', roomSettings);
+      
       const result = await callSignaling('create-room', {
         hostId: newPlayerId,
         hostName: name,
         hostAvatar: avatar,
-        settings,
+        settings: roomSettings,
         sessionToken: null // No token yet
       });
 
@@ -315,10 +347,15 @@ export const useMultiplayerGame = () => {
       setSessionToken(result.sessionToken);
       setPlayerName(name);
       setPlayerAvatar(avatar);
+      
+      // Use settings from response if available, otherwise use what we sent
+      const finalSettings = result.settings || roomSettings;
+      setSettings(finalSettings);
+      
       setGameState(prev => ({
         ...prev,
-        drawTime: settings.drawTime,
-        totalRounds: settings.totalRounds,
+        drawTime: finalSettings.drawTime,
+        totalRounds: finalSettings.totalRounds,
         revealedForPlayers: []
       }));
 
@@ -526,19 +563,41 @@ export const useMultiplayerGame = () => {
     });
   }, [roomId, playerId, sessionToken, players]);
 
-  // Toggle ready
+  // Toggle ready - with debounce and loading state
   const toggleReady = useCallback(async () => {
-    if (!roomId || !playerId || !sessionToken) return;
+    if (!roomId || !playerId || !sessionToken) {
+      console.log('[Multiplayer] toggleReady: missing required data', { roomId, playerId, hasToken: !!sessionToken });
+      return;
+    }
+
+    if (isTogglingReady || shouldDebounce('toggle-ready', 1000)) return;
 
     const currentPlayer = players.find(p => p.id === playerId);
-    if (!currentPlayer) return;
+    if (!currentPlayer) {
+      console.log('[Multiplayer] toggleReady: player not found');
+      return;
+    }
 
-    await callSignaling('toggle-ready', {
-      roomId,
-      playerId,
-      isReady: !currentPlayer.isReady
-    });
-  }, [roomId, playerId, sessionToken, players]);
+    setIsTogglingReady(true);
+    try {
+      const result = await callSignaling('toggle-ready', {
+        roomId,
+        playerId,
+        isReady: !currentPlayer.isReady
+      });
+      
+      if (result?.success) {
+        // Optimistic update
+        setPlayers(prev => prev.map(p => 
+          p.id === playerId ? { ...p, isReady: !p.isReady } : p
+        ));
+      }
+    } catch (err) {
+      console.error('[Multiplayer] toggleReady error:', err);
+    } finally {
+      setIsTogglingReady(false);
+    }
+  }, [roomId, playerId, sessionToken, players, isTogglingReady]);
 
   // Toggle mute
   const toggleMute = useCallback(async () => {
@@ -580,43 +639,66 @@ export const useMultiplayerGame = () => {
     }
   }, [roomId, playerId, sessionToken]);
 
-  // Start game - with random drawing order
+  // Start game - with random drawing order and debounce
   const startGame = useCallback(async () => {
-    if (players.length < 2 || !roomId || !playerId || !sessionToken) return;
-    
-    // Shuffle players for random drawing order
-    const shuffledPlayerIds = shuffleArray(players.map(p => p.id));
-    setDrawingOrder(shuffledPlayerIds);
-    setCurrentTurnIndex(0);
-    
-    const wordCount = settings.wordCount || 3;
-    const words = getRandomWords(wordCount);
-    
-    const firstDrawerId = shuffledPlayerIds[0];
-    
-    // Start game via edge function
-    await callSignaling('start-game', {
-      roomId,
-      playerId,
-      drawingOrder: shuffledPlayerIds,
-      wordOptions: words
-    });
-    
-    // If I'm the first drawer, set word options locally
-    if (firstDrawerId === playerId) {
-      setWordOptions(words);
+    if (players.length < 2 || !roomId || !playerId || !sessionToken) {
+      console.log('[Multiplayer] startGame: missing required data');
+      return;
     }
     
-    // Send system message
-    const drawerName = players.find(p => p.id === firstDrawerId)?.name || 'Unknown';
-    await callSignaling('send-message', {
-      roomId,
-      playerId: 'system',
-      playerName: 'System',
-      content: `Round 1 started! ${drawerName} is drawing first.`,
-      isSystemMessage: true
-    });
-  }, [players, roomId, playerId, sessionToken, settings]);
+    if (isStartingGame || shouldDebounce('start-game', 2000)) {
+      console.log('[Multiplayer] startGame: already starting or debounced');
+      return;
+    }
+    
+    setIsStartingGame(true);
+    
+    try {
+      // Shuffle players for random drawing order
+      const shuffledPlayerIds = shuffleArray(players.map(p => p.id));
+      setDrawingOrder(shuffledPlayerIds);
+      setCurrentTurnIndex(0);
+      
+      const wordCount = settings.wordCount || 3;
+      const words = getRandomWords(wordCount);
+      
+      const firstDrawerId = shuffledPlayerIds[0];
+      
+      // Start game via edge function
+      const result = await callSignaling('start-game', {
+        roomId,
+        playerId,
+        drawingOrder: shuffledPlayerIds,
+        wordOptions: words
+      });
+      
+      if (!result?.success) {
+        console.error('[Multiplayer] startGame failed:', result?.error);
+        return;
+      }
+      
+      // If I'm the first drawer, set word options locally
+      if (firstDrawerId === playerId) {
+        setWordOptions(words);
+      }
+      
+      // Send system message
+      const drawerName = players.find(p => p.id === firstDrawerId)?.name || 'Unknown';
+      await callSignaling('send-message', {
+        roomId,
+        playerId: 'system',
+        playerName: 'System',
+        content: `Round 1 started! ${drawerName} is drawing first.`,
+        isSystemMessage: true
+      });
+      
+      toast.success('Game started!');
+    } catch (err) {
+      console.error('[Multiplayer] startGame error:', err);
+    } finally {
+      setIsStartingGame(false);
+    }
+  }, [players, roomId, playerId, sessionToken, settings, isStartingGame]);
 
   // Select word - CRITICAL: This must transition from wordSelection to drawing
   const selectWord = useCallback(async (word: string) => {
@@ -646,100 +728,121 @@ export const useMultiplayerGame = () => {
     });
   }, [gameState, roomId, playerId, sessionToken, players]);
 
-  // Send message with improved scoring
+  // Send message with improved scoring - with debounce for rapid messages
   const sendMessage = useCallback(async (content: string) => {
-    if (!roomId || !playerId || !sessionToken) return;
+    if (!roomId || !playerId || !sessionToken) {
+      console.log('[Multiplayer] sendMessage: missing required data');
+      return;
+    }
+    
+    if (isSendingMessage) {
+      console.log('[Multiplayer] sendMessage: already sending');
+      return;
+    }
     
     const player = players.find(p => p.id === playerId);
-    if (!player) return;
+    if (!player) {
+      console.log('[Multiplayer] sendMessage: player not found');
+      return;
+    }
 
-    // Check if this might be a correct guess
-    if (gameState.phase === 'drawing' && 
-        gameState.currentDrawerId !== playerId &&
-        !gameState.correctGuessers.includes(playerId)) {
-      
-      // Check guess via edge function (secure word comparison)
-      const guessResult = await callSignaling('check-guess', {
-        roomId,
-        playerId,
-        guess: content
-      });
-      
-      if (guessResult.isCorrect) {
-        // Timer-based scoring: faster guess = more points
-        const timePercentage = gameState.timeRemaining / gameState.drawTime;
-        const basePoints = 50;
-        const timeBonus = Math.floor(timePercentage * 100);
-        const orderBonus = Math.max(0, (players.length - gameState.correctGuessers.length - 1)) * 10;
-        const points = basePoints + timeBonus + orderBonus;
-
-        // Update guesser score (host updates scores)
-        const currentPlayerData = players.find(p => p.id === playerId);
-        const isHost = currentPlayerData?.isHost;
+    setIsSendingMessage(true);
+    
+    try {
+      // Check if this might be a correct guess
+      if (gameState.phase === 'drawing' && 
+          gameState.currentDrawerId !== playerId &&
+          !gameState.correctGuessers.includes(playerId)) {
         
-        if (isHost) {
-          await callSignaling('update-score', {
-            roomId,
-            playerId,
-            targetPlayerId: playerId,
-            score: player.score + points
-          });
+        // Check guess via edge function (secure word comparison)
+        const guessResult = await callSignaling('check-guess', {
+          roomId,
+          playerId,
+          guess: content
+        });
+        
+        if (guessResult?.isCorrect) {
+          // Timer-based scoring: faster guess = more points
+          const timePercentage = gameState.timeRemaining / gameState.drawTime;
+          const basePoints = 50;
+          const timeBonus = Math.floor(timePercentage * 100);
+          const orderBonus = Math.max(0, (players.length - gameState.correctGuessers.length - 1)) * 10;
+          const points = basePoints + timeBonus + orderBonus;
 
-          // Update drawer score
-          const drawer = players.find(p => p.id === gameState.currentDrawerId);
-          if (drawer) {
-            const drawerBonus = 10 + Math.floor(timePercentage * 15);
+          // Update guesser score (host updates scores)
+          const currentPlayerData = players.find(p => p.id === playerId);
+          const isHostPlayer = currentPlayerData?.isHost;
+          
+          if (isHostPlayer) {
             await callSignaling('update-score', {
               roomId,
               playerId,
-              targetPlayerId: drawer.id,
-              score: drawer.score + drawerBonus
+              targetPlayerId: playerId,
+              score: player.score + points
             });
+
+            // Update drawer score
+            const drawer = players.find(p => p.id === gameState.currentDrawerId);
+            if (drawer) {
+              const drawerBonus = 10 + Math.floor(timePercentage * 15);
+              await callSignaling('update-score', {
+                roomId,
+                playerId,
+                targetPlayerId: drawer.id,
+                score: drawer.score + drawerBonus
+              });
+            }
           }
+
+          // Update game state - add player to correctGuessers
+          const newState: GameState = {
+            ...gameState,
+            correctGuessers: [...gameState.correctGuessers, playerId],
+            revealedForPlayers: [...(gameState.revealedForPlayers || []), playerId]
+          };
+          setGameState(newState);
+          
+          if (isHostPlayer) {
+            await updateGameState(newState);
+          }
+
+          // Send correct guess message
+          await callSignaling('send-message', {
+            roomId,
+            playerId,
+            playerName: player.name,
+            content: '🎉 Guessed correctly!',
+            isCorrectGuess: true
+          });
+
+          // System message
+          await callSignaling('send-message', {
+            roomId,
+            playerId: 'system',
+            playerName: 'System',
+            content: `${player.name} guessed the word! (+${points} points)`,
+            isSystemMessage: true
+          });
+          
+          return;
         }
-
-        // Update game state - add player to correctGuessers
-        const newState: GameState = {
-          ...gameState,
-          correctGuessers: [...gameState.correctGuessers, playerId],
-          revealedForPlayers: [...(gameState.revealedForPlayers || []), playerId]
-        };
-        setGameState(newState);
-        
-        if (isHost) {
-          await updateGameState(newState);
-        }
-
-        // Send correct guess message
-        await callSignaling('send-message', {
-          roomId,
-          playerId,
-          playerName: player.name,
-          content: '🎉 Guessed correctly!',
-          isCorrectGuess: true
-        });
-
-        // System message
-        await callSignaling('send-message', {
-          roomId,
-          playerId: 'system',
-          playerName: 'System',
-          content: `${player.name} guessed the word! (+${points} points)`,
-          isSystemMessage: true
-        });
-        
-        return;
       }
+      
+      // Regular message
+      const result = await callSignaling('send-message', {
+        roomId,
+        playerId,
+        playerName: player.name,
+        content
+      });
+      
+      console.log('[Multiplayer] Message sent:', result?.success);
+    } catch (err) {
+      console.error('[Multiplayer] sendMessage error:', err);
+    } finally {
+      setIsSendingMessage(false);
     }
-    
-    // Regular message
-    await callSignaling('send-message', {
-      roomId,
-      playerId,
-      playerName: player.name,
-      content
-    });
-  }, [roomId, playerId, sessionToken, players, gameState, updateGameState]);
+  }, [roomId, playerId, sessionToken, players, gameState, updateGameState, isSendingMessage]);
 
   // Next turn - random order per round
   const nextTurn = useCallback(async () => {
@@ -999,6 +1102,8 @@ export const useMultiplayerGame = () => {
     isDrawer,
     canStartGame,
     isLoading,
+    isStartingGame,
+    isTogglingReady,
     createRoom,
     joinRoom,
     toggleReady,
