@@ -1,31 +1,94 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { AVATARS } from '@/types/game';
+import { Switch } from '@/components/ui/switch';
+import { AVATARS, PublicRoom } from '@/types/game';
 import { cn } from '@/lib/utils';
-import { Palette, Users, Zap, Mic } from 'lucide-react';
+import { Palette, Users, Zap, Mic, Globe, Lock, Copy, Check, RefreshCw, Loader2 } from 'lucide-react';
+import { supabase } from '@/integrations/supabase/client';
+import { toast } from 'sonner';
 
 interface HomeScreenProps {
-  onCreateRoom: (name: string, avatar: string) => void;
+  onCreateRoom: (name: string, avatar: string, isPublic: boolean) => void;
   onJoinRoom: (code: string, name: string, avatar: string) => void;
 }
 
 export const HomeScreen = ({ onCreateRoom, onJoinRoom }: HomeScreenProps) => {
-  const [mode, setMode] = useState<'home' | 'create' | 'join'>('home');
+  const [mode, setMode] = useState<'home' | 'create' | 'join' | 'browse'>('home');
   const [name, setName] = useState('');
   const [avatar, setAvatar] = useState(AVATARS[0]);
   const [roomCode, setRoomCode] = useState('');
+  const [isPublic, setIsPublic] = useState(true);
+  const [publicRooms, setPublicRooms] = useState<PublicRoom[]>([]);
+  const [isLoadingRooms, setIsLoadingRooms] = useState(false);
+  const [copiedLink, setCopiedLink] = useState(false);
+
+  // Check for room code in URL on mount
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const codeFromUrl = params.get('room');
+    if (codeFromUrl && codeFromUrl.length === 6) {
+      setRoomCode(codeFromUrl.toUpperCase());
+      setMode('join');
+    }
+  }, []);
+
+  // Fetch public rooms
+  const fetchPublicRooms = async () => {
+    setIsLoadingRooms(true);
+    try {
+      const { data, error } = await supabase.functions.invoke('signaling', {
+        body: { action: 'get-public-rooms' }
+      });
+
+      if (error) throw error;
+      if (data?.rooms) {
+        setPublicRooms(data.rooms);
+      }
+    } catch (error) {
+      console.error('Failed to fetch public rooms:', error);
+      toast.error('Failed to load public rooms');
+    } finally {
+      setIsLoadingRooms(false);
+    }
+  };
+
+  useEffect(() => {
+    if (mode === 'browse') {
+      fetchPublicRooms();
+    }
+  }, [mode]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!name.trim()) return;
 
     if (mode === 'create') {
-      onCreateRoom(name.trim(), avatar);
+      onCreateRoom(name.trim(), avatar, isPublic);
     } else if (mode === 'join' && roomCode.trim()) {
       onJoinRoom(roomCode.trim().toUpperCase(), name.trim(), avatar);
     }
+  };
+
+  const handleJoinPublicRoom = (code: string) => {
+    if (!name.trim()) {
+      toast.error('Please enter your name first');
+      return;
+    }
+    onJoinRoom(code, name.trim(), avatar);
+  };
+
+  const getShareableLink = (code: string) => {
+    return `${window.location.origin}?room=${code}`;
+  };
+
+  const copyShareLink = async (code: string) => {
+    const link = getShareableLink(code);
+    await navigator.clipboard.writeText(link);
+    setCopiedLink(true);
+    toast.success('Link copied to clipboard!');
+    setTimeout(() => setCopiedLink(false), 2000);
   };
 
   if (mode === 'home') {
@@ -41,7 +104,7 @@ export const HomeScreen = ({ onCreateRoom, onJoinRoom }: HomeScreenProps) => {
           </p>
         </div>
 
-        <div className="flex flex-col sm:flex-row gap-4 mb-12 animate-slide-up" style={{ animationDelay: '0.1s' }}>
+        <div className="flex flex-col sm:flex-row gap-4 mb-8 animate-slide-up" style={{ animationDelay: '0.1s' }}>
           <Button
             size="lg"
             className="h-16 px-8 text-lg gap-3 animate-pulse-glow"
@@ -61,6 +124,17 @@ export const HomeScreen = ({ onCreateRoom, onJoinRoom }: HomeScreenProps) => {
           </Button>
         </div>
 
+        <Button
+          variant="secondary"
+          size="lg"
+          className="mb-12 gap-2 animate-slide-up"
+          style={{ animationDelay: '0.15s' }}
+          onClick={() => setMode('browse')}
+        >
+          <Globe className="w-5 h-5" />
+          Browse Public Rooms
+        </Button>
+
         <div className="grid grid-cols-2 md:grid-cols-4 gap-6 max-w-2xl animate-slide-up" style={{ animationDelay: '0.2s' }}>
           {[
             { icon: Palette, title: 'Draw', desc: 'Express your creativity' },
@@ -74,6 +148,104 @@ export const HomeScreen = ({ onCreateRoom, onJoinRoom }: HomeScreenProps) => {
               <p className="text-sm text-muted-foreground">{feature.desc}</p>
             </div>
           ))}
+        </div>
+      </div>
+    );
+  }
+
+  if (mode === 'browse') {
+    return (
+      <div className="min-h-screen flex flex-col items-center p-4 bg-gradient-to-br from-background via-background to-primary/10">
+        <div className="w-full max-w-2xl">
+          <button
+            onClick={() => setMode('home')}
+            className="text-muted-foreground hover:text-foreground mb-6 text-sm"
+          >
+            ← Back
+          </button>
+
+          <div className="flex items-center justify-between mb-6">
+            <h2 className="text-2xl font-bold">Public Rooms</h2>
+            <Button variant="outline" size="sm" onClick={fetchPublicRooms} disabled={isLoadingRooms}>
+              <RefreshCw className={cn("w-4 h-4 mr-2", isLoadingRooms && "animate-spin")} />
+              Refresh
+            </Button>
+          </div>
+
+          {/* Name/Avatar selection for joining */}
+          <div className="bg-card p-4 rounded-xl mb-6">
+            <Label className="mb-2 block text-sm">Your name & avatar</Label>
+            <div className="flex gap-4 items-center">
+              <div className="flex gap-2">
+                {AVATARS.slice(0, 6).map((a) => (
+                  <button
+                    key={a}
+                    type="button"
+                    className={cn(
+                      "w-10 h-10 text-xl rounded-lg flex items-center justify-center transition-all",
+                      avatar === a
+                        ? "bg-primary/20 ring-2 ring-primary scale-110"
+                        : "bg-muted hover:bg-muted/80"
+                    )}
+                    onClick={() => setAvatar(a)}
+                  >
+                    {a}
+                  </button>
+                ))}
+              </div>
+              <Input
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="Your name"
+                maxLength={20}
+                className="flex-1"
+              />
+            </div>
+          </div>
+
+          {/* Room list */}
+          {isLoadingRooms ? (
+            <div className="text-center py-12">
+              <Loader2 className="w-8 h-8 mx-auto animate-spin text-muted-foreground" />
+              <p className="text-muted-foreground mt-2">Loading rooms...</p>
+            </div>
+          ) : publicRooms.length === 0 ? (
+            <div className="text-center py-12 bg-card rounded-xl">
+              <Globe className="w-12 h-12 mx-auto text-muted-foreground mb-4" />
+              <p className="text-muted-foreground">No public rooms available</p>
+              <p className="text-sm text-muted-foreground mt-2">Create one to get started!</p>
+              <Button className="mt-4" onClick={() => setMode('create')}>
+                Create Room
+              </Button>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {publicRooms.map((room) => (
+                <div
+                  key={room.id}
+                  className="bg-card p-4 rounded-xl flex items-center justify-between hover:bg-card/80 transition-colors"
+                >
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <span className="font-mono font-bold text-lg">{room.code}</span>
+                      <span className="text-xs bg-primary/20 text-primary px-2 py-0.5 rounded">
+                        {room.language}
+                      </span>
+                    </div>
+                    <p className="text-sm text-muted-foreground">
+                      {room.playerCount}/{room.maxPlayers} players
+                    </p>
+                  </div>
+                  <Button
+                    onClick={() => handleJoinPublicRoom(room.code)}
+                    disabled={room.playerCount >= room.maxPlayers || !name.trim()}
+                  >
+                    Join
+                  </Button>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       </div>
     );
@@ -140,6 +312,33 @@ export const HomeScreen = ({ onCreateRoom, onJoinRoom }: HomeScreenProps) => {
                 placeholder="Enter 6-digit code"
                 maxLength={6}
                 className="mt-2 text-center text-2xl tracking-widest font-mono"
+              />
+            </div>
+          )}
+
+          {/* Public/Private toggle (create only) */}
+          {mode === 'create' && (
+            <div className="flex items-center justify-between p-4 bg-muted rounded-xl">
+              <div className="flex items-center gap-3">
+                {isPublic ? (
+                  <Globe className="w-5 h-5 text-primary" />
+                ) : (
+                  <Lock className="w-5 h-5 text-muted-foreground" />
+                )}
+                <div>
+                  <Label className="text-sm font-medium">
+                    {isPublic ? 'Public Room' : 'Private Room'}
+                  </Label>
+                  <p className="text-xs text-muted-foreground">
+                    {isPublic
+                      ? 'Anyone can find and join'
+                      : 'Only people with the code can join'}
+                  </p>
+                </div>
+              </div>
+              <Switch
+                checked={isPublic}
+                onCheckedChange={setIsPublic}
               />
             </div>
           )}

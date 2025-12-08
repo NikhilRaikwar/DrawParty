@@ -39,6 +39,8 @@ export interface GameState {
   timeRemaining: number;
   drawTime: number;
   correctGuessers: string[];
+  // Track which players have revealed words (for showing full word after correct guess)
+  revealedForPlayers: string[];
 }
 
 export interface RoomSettings {
@@ -48,6 +50,17 @@ export interface RoomSettings {
   isPublic: boolean;
   hintLevel: number; // 0-5
   gameMode: 'normal' | 'hidden' | 'combination';
+  language: 'english' | 'spanish' | 'french' | 'german';
+  wordCount: number; // Number of word choices for drawer (2-5)
+  showHints: boolean;
+}
+
+export interface PublicRoom {
+  id: string;
+  code: string;
+  playerCount: number;
+  maxPlayers: number;
+  language: string;
 }
 
 export interface Room {
@@ -129,4 +142,13 @@ export const generateWordHint = (word: string, level: number): string => {
     if (c === ' ') return ' ';
     return revealIndices.has(i) ? c : '_';
   }).join('');
+};
+
+// Generate word blanks display (underscores with proper spacing)
+export const generateWordBlanks = (word: string): string => {
+  return word.split('').map(char => {
+    if (char === ' ') return '  '; // Double space for word breaks
+    if (/[a-zA-Z0-9]/.test(char)) return '_';
+    return char; // Keep punctuation
+  }).join(' ');
 };

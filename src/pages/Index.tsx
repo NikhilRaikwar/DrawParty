@@ -48,7 +48,10 @@ const Index = () => {
     return (
       <>
         <HomeScreen
-          onCreateRoom={createRoom}
+          onCreateRoom={(name, avatar, isPublic) => {
+            setSettings({ ...settings, isPublic });
+            createRoom(name, avatar);
+          }}
           onJoinRoom={joinRoom}
         />
         <Toaster position="top-center" />

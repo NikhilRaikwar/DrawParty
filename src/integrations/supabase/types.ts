@@ -14,6 +14,41 @@ export type Database = {
   }
   public: {
     Tables: {
+      player_sessions: {
+        Row: {
+          created_at: string
+          expires_at: string
+          id: string
+          player_id: string
+          room_id: string
+          session_token: string
+        }
+        Insert: {
+          created_at?: string
+          expires_at?: string
+          id?: string
+          player_id: string
+          room_id: string
+          session_token: string
+        }
+        Update: {
+          created_at?: string
+          expires_at?: string
+          id?: string
+          player_id?: string
+          room_id?: string
+          session_token?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "player_sessions_room_id_fkey"
+            columns: ["room_id"]
+            isOneToOne: false
+            referencedRelation: "rooms"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       room_messages: {
         Row: {
           content: string
@@ -100,6 +135,41 @@ export type Database = {
             foreignKeyName: "room_players_room_id_fkey"
             columns: ["room_id"]
             isOneToOne: false
+            referencedRelation: "rooms"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      room_secrets: {
+        Row: {
+          created_at: string
+          current_word: string | null
+          id: string
+          room_id: string
+          updated_at: string
+          word_options: string[] | null
+        }
+        Insert: {
+          created_at?: string
+          current_word?: string | null
+          id?: string
+          room_id: string
+          updated_at?: string
+          word_options?: string[] | null
+        }
+        Update: {
+          created_at?: string
+          current_word?: string | null
+          id?: string
+          room_id?: string
+          updated_at?: string
+          word_options?: string[] | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "room_secrets_room_id_fkey"
+            columns: ["room_id"]
+            isOneToOne: true
             referencedRelation: "rooms"
             referencedColumns: ["id"]
           },

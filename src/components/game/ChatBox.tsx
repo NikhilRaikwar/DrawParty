@@ -10,13 +10,15 @@ interface ChatBoxProps {
   onSendMessage: (message: string) => void;
   disabled?: boolean;
   placeholder?: string;
+  hideMessages?: boolean;
 }
 
 export const ChatBox = ({
   messages,
   onSendMessage,
   disabled = false,
-  placeholder = "Type your guess..."
+  placeholder = "Type your guess...",
+  hideMessages = false
 }: ChatBoxProps) => {
   const [input, setInput] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -38,10 +40,29 @@ export const ChatBox = ({
     }
   };
 
+  // Simplified version for mobile quick input
+  if (hideMessages) {
+    return (
+      <form onSubmit={handleSubmit} className="flex gap-2">
+        <Input
+          ref={inputRef}
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          placeholder={placeholder}
+          disabled={disabled}
+          className="flex-1"
+        />
+        <Button type="submit" disabled={disabled || !input.trim()} size="icon">
+          <Send className="w-4 h-4" />
+        </Button>
+      </form>
+    );
+  }
+
   return (
     <div className="flex flex-col h-full bg-card rounded-xl overflow-hidden">
       {/* Messages */}
-      <div className="flex-1 overflow-y-auto p-4 space-y-2">
+      <div className="flex-1 overflow-y-auto p-3 sm:p-4 space-y-2">
         {messages.length === 0 ? (
           <div className="flex items-center justify-center h-full text-muted-foreground text-sm">
             No messages yet
@@ -56,7 +77,7 @@ export const ChatBox = ({
               )}
             >
               {message.isSystemMessage ? (
-                <span className="inline-block px-3 py-1 bg-muted rounded-full text-sm text-muted-foreground">
+                <span className="inline-block px-3 py-1 bg-muted rounded-full text-xs sm:text-sm text-muted-foreground">
                   {message.content}
                 </span>
               ) : (
@@ -69,13 +90,13 @@ export const ChatBox = ({
                   )}
                 >
                   <span className={cn(
-                    "font-semibold text-sm",
+                    "font-semibold text-xs sm:text-sm",
                     message.isCorrectGuess && "text-game-success"
                   )}>
                     {message.playerName}:
                   </span>{' '}
                   <span className={cn(
-                    "text-sm",
+                    "text-xs sm:text-sm",
                     message.isCorrectGuess && "text-game-success font-medium"
                   )}>
                     {message.content}
@@ -89,7 +110,7 @@ export const ChatBox = ({
       </div>
 
       {/* Input */}
-      <form onSubmit={handleSubmit} className="p-3 border-t border-border">
+      <form onSubmit={handleSubmit} className="p-2 sm:p-3 border-t border-border">
         <div className="flex gap-2">
           <Input
             ref={inputRef}
@@ -97,7 +118,7 @@ export const ChatBox = ({
             onChange={(e) => setInput(e.target.value)}
             placeholder={placeholder}
             disabled={disabled}
-            className="flex-1"
+            className="flex-1 text-sm"
           />
           <Button type="submit" disabled={disabled || !input.trim()} size="icon">
             <Send className="w-4 h-4" />
