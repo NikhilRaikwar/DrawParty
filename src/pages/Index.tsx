@@ -23,7 +23,6 @@ const Index = () => {
     isLoading,
     createRoom,
     joinRoom,
-    addBotPlayer,
     toggleReady,
     toggleMute,
     startGame,
@@ -74,7 +73,6 @@ const Index = () => {
           isLoading={isLoading}
           onSettingsChange={setSettings}
           onToggleReady={toggleReady}
-          onAddBot={addBotPlayer}
           onStartGame={startGame}
           onSendMessage={sendMessage}
           onLeave={leaveRoom}

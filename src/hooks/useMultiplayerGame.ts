@@ -48,11 +48,51 @@ const shuffleArray = <T,>(array: T[]): T[] => {
   return shuffled;
 };
 
+// Storage key for session persistence
+const SESSION_STORAGE_KEY = 'drawparty_session';
+
+interface StoredSession {
+  roomId: string;
+  roomCode: string;
+  playerId: string;
+  sessionToken: string;
+  playerName: string;
+  playerAvatar: string;
+}
+
+const saveSession = (session: StoredSession) => {
+  try {
+    localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(session));
+  } catch (e) {
+    console.error('[Session] Failed to save session:', e);
+  }
+};
+
+const loadSession = (): StoredSession | null => {
+  try {
+    const stored = localStorage.getItem(SESSION_STORAGE_KEY);
+    return stored ? JSON.parse(stored) : null;
+  } catch (e) {
+    console.error('[Session] Failed to load session:', e);
+    return null;
+  }
+};
+
+const clearSession = () => {
+  try {
+    localStorage.removeItem(SESSION_STORAGE_KEY);
+  } catch (e) {
+    console.error('[Session] Failed to clear session:', e);
+  }
+};
+
 export const useMultiplayerGame = () => {
   const [roomId, setRoomId] = useState<string | null>(null);
   const [roomCode, setRoomCode] = useState<string | null>(null);
   const [playerId, setPlayerId] = useState<string | null>(null);
   const [sessionToken, setSessionToken] = useState<string | null>(null);
+  const [playerName, setPlayerName] = useState<string>('');
+  const [playerAvatar, setPlayerAvatar] = useState<string>('');
   const [players, setPlayers] = useState<Player[]>([]);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [gameState, setGameState] = useState<GameState>(initialGameState);
@@ -63,6 +103,7 @@ export const useMultiplayerGame = () => {
   const [currentTurnIndex, setCurrentTurnIndex] = useState(0);
   const timerRef = useRef<NodeJS.Timeout | null>(null);
   const joiningRef = useRef(false);
+  const hasAttemptedRejoin = useRef(false);
 
   // Call signaling server with session token
   const callSignaling = async (action: string, params: Record<string, unknown>) => {
@@ -251,14 +292,14 @@ export const useMultiplayerGame = () => {
   };
 
   // Create room
-  const createRoom = useCallback(async (playerName: string, avatar: string) => {
+  const createRoom = useCallback(async (name: string, avatar: string) => {
     setIsLoading(true);
     try {
       const newPlayerId = generateId();
       
       const result = await callSignaling('create-room', {
         hostId: newPlayerId,
-        hostName: playerName,
+        hostName: name,
         hostAvatar: avatar,
         settings,
         sessionToken: null // No token yet
@@ -272,12 +313,27 @@ export const useMultiplayerGame = () => {
       setRoomCode(result.roomCode);
       setPlayerId(newPlayerId);
       setSessionToken(result.sessionToken);
+      setPlayerName(name);
+      setPlayerAvatar(avatar);
       setGameState(prev => ({
         ...prev,
         drawTime: settings.drawTime,
         totalRounds: settings.totalRounds,
         revealedForPlayers: []
       }));
+
+      // Save session for persistence
+      saveSession({
+        roomId: result.roomId,
+        roomCode: result.roomCode,
+        playerId: newPlayerId,
+        sessionToken: result.sessionToken,
+        playerName: name,
+        playerAvatar: avatar
+      });
+
+      // Update URL with room code
+      window.history.replaceState({}, '', `?room=${result.roomCode}`);
 
       toast.success('Room created!', { description: `Code: ${result.roomCode}` });
       return result.roomCode;
@@ -291,7 +347,7 @@ export const useMultiplayerGame = () => {
   }, [settings]);
 
   // Join room - with duplicate prevention
-  const joinRoom = useCallback(async (code: string, playerName: string, avatar: string) => {
+  const joinRoom = useCallback(async (code: string, name: string, avatar: string) => {
     // Prevent double-clicking
     if (joiningRef.current) {
       console.log('[Multiplayer] Join already in progress');
@@ -307,7 +363,7 @@ export const useMultiplayerGame = () => {
       const result = await callSignaling('join-room', {
         code: code.toUpperCase(),
         playerId: newPlayerId,
-        playerName,
+        playerName: name,
         playerAvatar: avatar,
         sessionToken: null // No token yet
       });
@@ -321,6 +377,8 @@ export const useMultiplayerGame = () => {
       setRoomCode(code.toUpperCase());
       setPlayerId(newPlayerId);
       setSessionToken(result.sessionToken);
+      setPlayerName(name);
+      setPlayerAvatar(avatar);
 
       const { data: room } = await supabase
         .from('rooms')
@@ -337,6 +395,19 @@ export const useMultiplayerGame = () => {
         setSettings({ ...defaultSettings, ...(room.settings as unknown as RoomSettings) });
       }
 
+      // Save session for persistence
+      saveSession({
+        roomId: result.roomId,
+        roomCode: code.toUpperCase(),
+        playerId: newPlayerId,
+        sessionToken: result.sessionToken,
+        playerName: name,
+        playerAvatar: avatar
+      });
+
+      // Update URL with room code
+      window.history.replaceState({}, '', `?room=${code.toUpperCase()}`);
+
       toast.success('Joined room!');
       return true;
     } catch (err) {
@@ -349,6 +420,85 @@ export const useMultiplayerGame = () => {
       setTimeout(() => {
         joiningRef.current = false;
       }, 1000);
+    }
+  }, []);
+
+  // Try to rejoin from stored session on mount
+  useEffect(() => {
+    if (hasAttemptedRejoin.current) return;
+    hasAttemptedRejoin.current = true;
+
+    const storedSession = loadSession();
+    if (!storedSession) return;
+
+    // Check if URL has a room code that matches
+    const params = new URLSearchParams(window.location.search);
+    const urlRoomCode = params.get('room');
+    
+    // Only auto-rejoin if URL room code matches stored session
+    if (urlRoomCode && urlRoomCode.toUpperCase() === storedSession.roomCode) {
+      console.log('[Multiplayer] Attempting to rejoin session...');
+      
+      // Rejoin using stored credentials
+      (async () => {
+        setIsLoading(true);
+        try {
+          const result = await callSignaling('join-room', {
+            code: storedSession.roomCode,
+            playerId: storedSession.playerId,
+            playerName: storedSession.playerName,
+            playerAvatar: storedSession.playerAvatar,
+            sessionToken: null
+          });
+
+          if (!result.success) {
+            console.log('[Multiplayer] Failed to rejoin, clearing session');
+            clearSession();
+            window.history.replaceState({}, '', window.location.pathname);
+            return;
+          }
+
+          setRoomId(result.roomId);
+          setRoomCode(storedSession.roomCode);
+          setPlayerId(storedSession.playerId);
+          setSessionToken(result.sessionToken);
+          setPlayerName(storedSession.playerName);
+          setPlayerAvatar(storedSession.playerAvatar);
+
+          // Update stored session with new token
+          saveSession({
+            ...storedSession,
+            roomId: result.roomId,
+            sessionToken: result.sessionToken
+          });
+
+          const { data: room } = await supabase
+            .from('rooms')
+            .select('*')
+            .eq('id', result.roomId)
+            .single();
+
+          if (room) {
+            const roomGameState = room.game_state as unknown as GameState;
+            setGameState({
+              ...roomGameState,
+              revealedForPlayers: roomGameState.revealedForPlayers || []
+            });
+            setSettings({ ...defaultSettings, ...(room.settings as unknown as RoomSettings) });
+          }
+
+          toast.success('Reconnected to room!');
+        } catch (err) {
+          console.error('[Multiplayer] Rejoin error:', err);
+          clearSession();
+          window.history.replaceState({}, '', window.location.pathname);
+        } finally {
+          setIsLoading(false);
+        }
+      })();
+    } else if (!urlRoomCode) {
+      // No room in URL, clear any stale session
+      clearSession();
     }
   }, []);
 
@@ -743,10 +893,16 @@ export const useMultiplayerGame = () => {
       });
     }
 
+    // Clear stored session and URL
+    clearSession();
+    window.history.replaceState({}, '', window.location.pathname);
+
     setRoomId(null);
     setRoomCode(null);
     setPlayerId(null);
     setSessionToken(null);
+    setPlayerName('');
+    setPlayerAvatar('');
     setPlayers([]);
     setMessages([]);
     setGameState(initialGameState);
@@ -845,7 +1001,6 @@ export const useMultiplayerGame = () => {
     isLoading,
     createRoom,
     joinRoom,
-    addBotPlayer,
     toggleReady,
     toggleMute,
     startGame,

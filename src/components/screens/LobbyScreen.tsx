@@ -6,7 +6,7 @@ import { Label } from '@/components/ui/label';
 import { Slider } from '@/components/ui/slider';
 import { Switch } from '@/components/ui/switch';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Copy, Check, UserPlus, Play, Settings, Loader2, X, Share2, Globe, Lock } from 'lucide-react';
+import { Copy, Check, Play, Settings, Loader2, X, Share2, Globe, Lock } from 'lucide-react';
 import { useState } from 'react';
 import { cn } from '@/lib/utils';
 import { Sheet, SheetContent, SheetTrigger, SheetHeader, SheetTitle } from '@/components/ui/sheet';
@@ -23,7 +23,6 @@ interface LobbyScreenProps {
   isLoading?: boolean;
   onSettingsChange: (settings: RoomSettings) => void;
   onToggleReady: () => void;
-  onAddBot: () => void;
   onStartGame: () => void;
   onSendMessage: (message: string) => void;
   onLeave: () => void;
@@ -40,7 +39,6 @@ export const LobbyScreen = ({
   isLoading,
   onSettingsChange,
   onToggleReady,
-  onAddBot,
   onStartGame,
   onSendMessage,
   onLeave
@@ -302,12 +300,6 @@ export const LobbyScreen = ({
               <h2 className="text-lg sm:text-xl font-bold">
                 Players ({players.length}/{settings.maxPlayers})
               </h2>
-              {isHost && players.length < settings.maxPlayers && (
-                <Button variant="outline" size="sm" onClick={onAddBot}>
-                  <UserPlus className="w-4 h-4 mr-2" />
-                  Add Bot
-                </Button>
-              )}
             </div>
 
             <div className="grid gap-2 sm:gap-3">
