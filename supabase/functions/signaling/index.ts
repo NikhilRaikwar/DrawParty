@@ -538,8 +538,14 @@ serve(async (req) => {
       case 'start-game': {
         const { roomId, playerId, sessionToken, drawingOrder, wordOptions } = params;
         
+        console.log('[Signaling] start-game called', { roomId, playerId, hasToken: !!sessionToken, drawingOrder: drawingOrder?.length });
+        
         // Validate session
-        if (!await validateSession(supabase, roomId, playerId, sessionToken)) {
+        const sessionValid = await validateSession(supabase, roomId, playerId, sessionToken);
+        console.log('[Signaling] Session validation result:', sessionValid);
+        
+        if (!sessionValid) {
+          console.error('[Signaling] Invalid session for start-game');
           return new Response(JSON.stringify({ success: false, error: 'Invalid session' }), {
             status: 401,
             headers: { ...corsHeaders, 'Content-Type': 'application/json' }
@@ -547,7 +553,11 @@ serve(async (req) => {
         }
         
         // Only host can start game
-        if (!await isPlayerHost(supabase, roomId, playerId)) {
+        const isHost = await isPlayerHost(supabase, roomId, playerId);
+        console.log('[Signaling] Host check result:', isHost);
+        
+        if (!isHost) {
+          console.error('[Signaling] Player is not host');
           return new Response(JSON.stringify({ success: false, error: 'Only host can start game' }), {
             status: 403,
             headers: { ...corsHeaders, 'Content-Type': 'application/json' }
@@ -555,23 +565,41 @@ serve(async (req) => {
         }
         
         // Get room settings
-        const { data: room } = await supabase
+        const { data: room, error: roomError } = await supabase
           .from('rooms')
           .select('settings')
           .eq('id', roomId)
           .single();
         
+        if (roomError) {
+          console.error('[Signaling] Failed to get room settings:', roomError);
+          return new Response(JSON.stringify({ success: false, error: 'Failed to get room settings' }), {
+            status: 500,
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+          });
+        }
+        
         const settings = room?.settings as { drawTime: number; totalRounds: number };
         const firstDrawerId = drawingOrder[0];
         
+        console.log('[Signaling] Storing word options in room_secrets');
+        
         // Store word options in room_secrets (only drawer will get these)
-        await supabase
+        const { error: secretsError } = await supabase
           .from('room_secrets')
           .update({ 
             word_options: wordOptions,
             current_word: null 
           })
           .eq('room_id', roomId);
+        
+        if (secretsError) {
+          console.error('[Signaling] Failed to update room_secrets:', secretsError);
+          return new Response(JSON.stringify({ success: false, error: 'Failed to store word options' }), {
+            status: 500,
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+          });
+        }
         
         // Update game state
         const newState = {
@@ -587,11 +615,22 @@ serve(async (req) => {
           revealedForPlayers: []
         };
         
-        await supabase
+        console.log('[Signaling] Updating game state to wordSelection');
+        
+        const { error: stateError } = await supabase
           .from('rooms')
           .update({ game_state: newState })
           .eq('id', roomId);
+        
+        if (stateError) {
+          console.error('[Signaling] Failed to update game state:', stateError);
+          return new Response(JSON.stringify({ success: false, error: 'Failed to update game state' }), {
+            status: 500,
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+          });
+        }
 
+        console.log('[Signaling] Game started successfully');
         return new Response(JSON.stringify({ success: true }), {
           headers: { ...corsHeaders, 'Content-Type': 'application/json' }
         });
