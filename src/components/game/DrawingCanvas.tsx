@@ -8,11 +8,15 @@ interface DrawingCanvasProps {
   isDrawer: boolean;
   onDrawingData?: (data: DrawingData) => void;
   receivedDrawingData?: DrawingData | null;
+  clearTrigger?: number; // Increment to trigger canvas clear
 }
 
 const MAX_HISTORY = 20;
+// Fixed canvas dimensions for consistent drawing across devices
+const CANVAS_WIDTH = 800;
+const CANVAS_HEIGHT = 600;
 
-export const DrawingCanvas = ({ isDrawer, onDrawingData, receivedDrawingData }: DrawingCanvasProps) => {
+export const DrawingCanvas = ({ isDrawer, onDrawingData, receivedDrawingData, clearTrigger = 0 }: DrawingCanvasProps) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const [isDrawing, setIsDrawing] = useState(false);
@@ -23,6 +27,7 @@ export const DrawingCanvas = ({ isDrawer, onDrawingData, receivedDrawingData }: 
   const [historyIndex, setHistoryIndex] = useState(-1);
   const isInitializedRef = useRef(false);
   const lastPointRef = useRef<{ x: number; y: number } | null>(null);
+  const lastClearTrigger = useRef(clearTrigger);
 
   // Save canvas state as data URL
   const saveToHistory = useCallback(() => {
@@ -42,17 +47,16 @@ export const DrawingCanvas = ({ isDrawer, onDrawingData, receivedDrawingData }: 
     setHistoryIndex(prev => Math.min(prev + 1, MAX_HISTORY - 1));
   }, [historyIndex]);
 
-  // Initialize canvas
+  // Initialize canvas with fixed size
   useEffect(() => {
     if (isInitializedRef.current) return;
     
     const canvas = canvasRef.current;
-    const container = containerRef.current;
-    if (!canvas || !container) return;
+    if (!canvas) return;
 
-    const rect = container.getBoundingClientRect();
-    canvas.width = rect.width || 800;
-    canvas.height = rect.height || 600;
+    // Use fixed dimensions for consistent drawing
+    canvas.width = CANVAS_WIDTH;
+    canvas.height = CANVAS_HEIGHT;
 
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
@@ -69,34 +73,24 @@ export const DrawingCanvas = ({ isDrawer, onDrawingData, receivedDrawingData }: 
     isInitializedRef.current = true;
   }, []);
 
-  // Handle resize
+  // Clear canvas when clearTrigger changes (new turn)
   useEffect(() => {
-    const handleResize = () => {
-      const canvas = canvasRef.current;
-      const container = containerRef.current;
-      if (!canvas || !container) return;
+    if (clearTrigger !== lastClearTrigger.current && isInitializedRef.current) {
+      lastClearTrigger.current = clearTrigger;
       
-      const ctx = canvas.getContext('2d');
-      if (!ctx) return;
-
-      const tempCanvas = document.createElement('canvas');
-      tempCanvas.width = canvas.width;
-      tempCanvas.height = canvas.height;
-      const tempCtx = tempCanvas.getContext('2d');
-      tempCtx?.drawImage(canvas, 0, 0);
-
-      const rect = container.getBoundingClientRect();
-      canvas.width = rect.width || 800;
-      canvas.height = rect.height || 600;
+      const canvas = canvasRef.current;
+      const ctx = canvas?.getContext('2d');
+      if (!ctx || !canvas) return;
 
       ctx.fillStyle = '#FFFFFF';
       ctx.fillRect(0, 0, canvas.width, canvas.height);
-      ctx.drawImage(tempCanvas, 0, 0);
-    };
-
-    window.addEventListener('resize', handleResize);
-    return () => window.removeEventListener('resize', handleResize);
-  }, []);
+      
+      // Reset history
+      const dataUrl = canvas.toDataURL('image/png');
+      setHistoryStack([dataUrl]);
+      setHistoryIndex(0);
+    }
+  }, [clearTrigger]);
 
   // Handle received drawing data (for non-drawers)
   useEffect(() => {
@@ -154,8 +148,9 @@ export const DrawingCanvas = ({ isDrawer, onDrawingData, receivedDrawingData }: 
     if (!canvas) return { x: 0, y: 0 };
 
     const rect = canvas.getBoundingClientRect();
-    const scaleX = canvas.width / rect.width;
-    const scaleY = canvas.height / rect.height;
+    // Scale coordinates from display size to canvas size
+    const scaleX = CANVAS_WIDTH / rect.width;
+    const scaleY = CANVAS_HEIGHT / rect.height;
 
     if ('touches' in e) {
       const touch = e.touches[0];
@@ -383,16 +378,20 @@ export const DrawingCanvas = ({ isDrawer, onDrawingData, receivedDrawingData }: 
   };
 
   return (
-    <div className="flex flex-col gap-4 h-full">
+    <div className="flex flex-col gap-2 sm:gap-4 h-full">
+      {/* Canvas container with fixed aspect ratio */}
       <div 
         ref={containerRef}
-        className="relative flex-1 bg-canvas-bg rounded-xl border-4 border-canvas-border shadow-lg overflow-hidden min-h-[400px]"
+        className="relative flex-1 bg-canvas-bg rounded-lg sm:rounded-xl border-2 sm:border-4 border-canvas-border shadow-lg overflow-hidden"
+        style={{ aspectRatio: `${CANVAS_WIDTH}/${CANVAS_HEIGHT}` }}
       >
         <canvas
           ref={canvasRef}
+          width={CANVAS_WIDTH}
+          height={CANVAS_HEIGHT}
           className={cn(
             "absolute inset-0 w-full h-full touch-none",
-            isDrawer ? "cursor-crosshair" : "cursor-not-allowed"
+            isDrawer ? "cursor-crosshair" : "cursor-default"
           )}
           onMouseDown={startDrawing}
           onMouseMove={draw}
@@ -404,50 +403,53 @@ export const DrawingCanvas = ({ isDrawer, onDrawingData, receivedDrawingData }: 
         />
         {!isDrawer && (
           <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-            <div className="bg-foreground/10 backdrop-blur-sm px-6 py-3 rounded-full">
-              <p className="text-foreground/60 font-medium">Watch the drawing...</p>
+            <div className="bg-foreground/10 backdrop-blur-sm px-4 py-2 sm:px-6 sm:py-3 rounded-full">
+              <p className="text-foreground/60 font-medium text-sm sm:text-base">Watch the drawing...</p>
             </div>
           </div>
         )}
       </div>
 
       {isDrawer && (
-        <div className="flex flex-wrap items-center gap-4 p-4 bg-card rounded-xl shadow-md">
+        <div className="flex flex-wrap items-center gap-2 sm:gap-4 p-2 sm:p-4 bg-card rounded-lg sm:rounded-xl shadow-md">
           {/* Tools */}
-          <div className="flex gap-2">
+          <div className="flex gap-1 sm:gap-2">
             <Button
               variant={tool === 'brush' ? 'default' : 'outline'}
               size="icon"
+              className="h-8 w-8 sm:h-10 sm:w-10"
               onClick={() => setTool('brush')}
             >
-              <Paintbrush className="w-5 h-5" />
+              <Paintbrush className="w-4 h-4 sm:w-5 sm:h-5" />
             </Button>
             <Button
               variant={tool === 'eraser' ? 'default' : 'outline'}
               size="icon"
+              className="h-8 w-8 sm:h-10 sm:w-10"
               onClick={() => setTool('eraser')}
             >
-              <Eraser className="w-5 h-5" />
+              <Eraser className="w-4 h-4 sm:w-5 sm:h-5" />
             </Button>
             <Button
               variant={tool === 'fill' ? 'default' : 'outline'}
               size="icon"
+              className="h-8 w-8 sm:h-10 sm:w-10"
               onClick={() => setTool('fill')}
             >
-              <PaintBucket className="w-5 h-5" />
+              <PaintBucket className="w-4 h-4 sm:w-5 sm:h-5" />
             </Button>
           </div>
 
-          <div className="w-px h-8 bg-border" />
+          <div className="w-px h-6 sm:h-8 bg-border hidden sm:block" />
 
-          {/* Colors */}
-          <div className="flex flex-wrap gap-1.5">
+          {/* Colors - scrollable on mobile */}
+          <div className="flex gap-1 sm:gap-1.5 flex-wrap max-w-[180px] sm:max-w-none overflow-x-auto">
             {DRAWING_COLORS.map((c) => (
               <button
                 key={c}
                 type="button"
                 className={cn(
-                  "w-7 h-7 rounded-full border-2 transition-transform hover:scale-110",
+                  "w-5 h-5 sm:w-7 sm:h-7 rounded-full border-2 transition-transform hover:scale-110 flex-shrink-0",
                   color === c ? "border-primary ring-2 ring-primary/50 scale-110" : "border-muted"
                 )}
                 style={{ backgroundColor: c }}
@@ -456,61 +458,65 @@ export const DrawingCanvas = ({ isDrawer, onDrawingData, receivedDrawingData }: 
             ))}
           </div>
 
-          <div className="w-px h-8 bg-border" />
+          <div className="w-px h-6 sm:h-8 bg-border hidden sm:block" />
 
           {/* Brush sizes */}
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1 sm:gap-2">
             {BRUSH_SIZES.map((size) => (
               <button
                 key={size}
                 type="button"
                 className={cn(
-                  "flex items-center justify-center w-10 h-10 rounded-lg border-2 transition-all hover:scale-105",
+                  "flex items-center justify-center w-7 h-7 sm:w-10 sm:h-10 rounded-md sm:rounded-lg border-2 transition-all hover:scale-105",
                   brushSize === size ? "border-primary bg-primary/10" : "border-muted bg-background"
                 )}
                 onClick={() => setBrushSize(size)}
               >
                 <div
                   className="rounded-full bg-foreground"
-                  style={{ width: size, height: size }}
+                  style={{ width: Math.max(size * 0.6, 3), height: Math.max(size * 0.6, 3) }}
                 />
               </button>
             ))}
           </div>
 
-          <div className="w-px h-8 bg-border" />
+          <div className="w-px h-6 sm:h-8 bg-border hidden sm:block" />
 
           {/* Actions */}
-          <div className="flex gap-2">
+          <div className="flex gap-1 sm:gap-2">
             <Button
               variant="outline"
               size="icon"
+              className="h-8 w-8 sm:h-10 sm:w-10"
               onClick={undo}
               disabled={historyIndex <= 0}
             >
-              <Undo2 className="w-5 h-5" />
+              <Undo2 className="w-4 h-4 sm:w-5 sm:h-5" />
             </Button>
             <Button
               variant="outline"
               size="icon"
+              className="h-8 w-8 sm:h-10 sm:w-10"
               onClick={redo}
               disabled={historyIndex >= historyStack.length - 1}
             >
-              <Redo2 className="w-5 h-5" />
+              <Redo2 className="w-4 h-4 sm:w-5 sm:h-5" />
             </Button>
             <Button
               variant="destructive"
               size="icon"
+              className="h-8 w-8 sm:h-10 sm:w-10"
               onClick={clearCanvas}
             >
-              <Trash2 className="w-5 h-5" />
+              <Trash2 className="w-4 h-4 sm:w-5 sm:h-5" />
             </Button>
             <Button
               variant="outline"
               size="icon"
+              className="h-8 w-8 sm:h-10 sm:w-10 hidden sm:flex"
               onClick={downloadCanvas}
             >
-              <Download className="w-5 h-5" />
+              <Download className="w-4 h-4 sm:w-5 sm:h-5" />
             </Button>
           </div>
         </div>

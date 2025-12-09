@@ -11,6 +11,7 @@ interface ChatBoxProps {
   disabled?: boolean;
   placeholder?: string;
   hideMessages?: boolean;
+  compact?: boolean;
 }
 
 export const ChatBox = ({
@@ -18,7 +19,8 @@ export const ChatBox = ({
   onSendMessage,
   disabled = false,
   placeholder = "Type your guess...",
-  hideMessages = false
+  hideMessages = false,
+  compact = false
 }: ChatBoxProps) => {
   const [input, setInput] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -43,16 +45,21 @@ export const ChatBox = ({
   // Simplified version for mobile quick input
   if (hideMessages) {
     return (
-      <form onSubmit={handleSubmit} className="flex gap-2">
+      <form onSubmit={handleSubmit} className="flex gap-1.5 sm:gap-2">
         <Input
           ref={inputRef}
           value={input}
           onChange={(e) => setInput(e.target.value)}
           placeholder={placeholder}
           disabled={disabled}
-          className="flex-1"
+          className={cn("flex-1", compact && "h-9 text-sm")}
         />
-        <Button type="submit" disabled={disabled || !input.trim()} size="icon">
+        <Button 
+          type="submit" 
+          disabled={disabled || !input.trim()} 
+          size="icon"
+          className={cn(compact && "h-9 w-9")}
+        >
           <Send className="w-4 h-4" />
         </Button>
       </form>

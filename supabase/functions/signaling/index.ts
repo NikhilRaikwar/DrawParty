@@ -1088,6 +1088,106 @@ serve(async (req) => {
         });
       }
 
+      case 'reveal-hint': {
+        const { roomId, playerId, sessionToken, timeRemaining, drawTime } = params;
+        
+        // Validate session
+        if (!await validateSession(supabase, roomId, playerId, sessionToken)) {
+          return new Response(JSON.stringify({ success: false, error: 'Invalid session' }), {
+            status: 401,
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+          });
+        }
+        
+        // Only host can update hints
+        if (!await isPlayerHost(supabase, roomId, playerId)) {
+          return new Response(JSON.stringify({ success: false, error: 'Only host can update hints' }), {
+            status: 403,
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+          });
+        }
+        
+        // Get current word and room state
+        const { data: secrets } = await supabase
+          .from('room_secrets')
+          .select('current_word')
+          .eq('room_id', roomId)
+          .single();
+        
+        const { data: room } = await supabase
+          .from('rooms')
+          .select('game_state')
+          .eq('id', roomId)
+          .single();
+        
+        const currentWord = secrets?.current_word;
+        const currentState = room?.game_state as Record<string, unknown>;
+        
+        if (!currentWord || !currentState) {
+          return new Response(JSON.stringify({ success: false, error: 'No active word' }), {
+            status: 400,
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+          });
+        }
+        
+        // Calculate how many letters to reveal based on time
+        const timePercentage = timeRemaining / drawTime;
+        const wordChars = currentWord.split('');
+        const nonSpaceIndices = wordChars.map((c: string, i: number) => c !== ' ' ? i : -1).filter((i: number) => i !== -1);
+        
+        // Reveal letters progressively: 
+        // At 60% time: reveal 1 letter
+        // At 40% time: reveal 2 letters
+        // At 20% time: reveal 3 letters
+        let revealCount = 0;
+        if (timePercentage <= 0.6 && timePercentage > 0.4) revealCount = 1;
+        else if (timePercentage <= 0.4 && timePercentage > 0.2) revealCount = 2;
+        else if (timePercentage <= 0.2) revealCount = Math.min(3, Math.floor(nonSpaceIndices.length * 0.4));
+        
+        // Generate hint with revealed letters at random positions
+        const currentHint = (currentState.wordHint as string) || wordChars.map((c: string) => c === ' ' ? ' ' : '_').join('');
+        const hintChars = currentHint.split('');
+        
+        // Find indices that are still hidden
+        const hiddenIndices = nonSpaceIndices.filter((i: number) => hintChars[i * 2] === '_');
+        
+        // Calculate how many more we need to reveal
+        const alreadyRevealed = nonSpaceIndices.length - hiddenIndices.length;
+        const toReveal = Math.max(0, revealCount - alreadyRevealed);
+        
+        if (toReveal > 0 && hiddenIndices.length > 0) {
+          // Shuffle and pick random indices to reveal
+          const shuffled = hiddenIndices.sort(() => Math.random() - 0.5);
+          const indicesToReveal = shuffled.slice(0, toReveal);
+          
+          for (const idx of indicesToReveal) {
+            hintChars[idx * 2] = wordChars[idx];
+          }
+          
+          const newHint = hintChars.join('');
+          
+          // Update game state with new hint
+          const newState = {
+            ...currentState,
+            wordHint: newHint,
+            timeRemaining
+          };
+          
+          await supabase
+            .from('rooms')
+            .update({ game_state: newState })
+            .eq('id', roomId);
+          
+          return new Response(JSON.stringify({ success: true, hint: newHint }), {
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+          });
+        }
+        
+        return new Response(JSON.stringify({ success: true, hint: currentHint }), {
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+        });
+      }
+
       default:
         return new Response(JSON.stringify({ success: false, error: 'Unknown action' }), {
           status: 400,

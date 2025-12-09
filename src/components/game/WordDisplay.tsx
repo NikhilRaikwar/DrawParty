@@ -1,5 +1,4 @@
 import { cn } from '@/lib/utils';
-import { Player } from '@/types/game';
 
 interface WordDisplayProps {
   word: string | null;
@@ -8,6 +7,8 @@ interface WordDisplayProps {
   phase: 'lobby' | 'wordSelection' | 'drawing' | 'revealing' | 'roundEnd' | 'gameEnd';
   currentDrawerName?: string;
   hasGuessedCorrectly?: boolean;
+  timeRemaining?: number;
+  drawTime?: number;
 }
 
 export const WordDisplay = ({ 
@@ -16,13 +17,15 @@ export const WordDisplay = ({
   isDrawer, 
   phase,
   currentDrawerName,
-  hasGuessedCorrectly = false
+  hasGuessedCorrectly = false,
+  timeRemaining = 0,
+  drawTime = 80
 }: WordDisplayProps) => {
   // Lobby state
   if (phase === 'lobby') {
     return (
       <div className="text-center">
-        <p className="text-sm sm:text-lg text-muted-foreground">Waiting for the game to start...</p>
+        <p className="text-xs sm:text-sm lg:text-lg text-muted-foreground">Waiting for the game to start...</p>
       </div>
     );
   }
@@ -31,7 +34,7 @@ export const WordDisplay = ({
   if (phase === 'wordSelection') {
     return (
       <div className="text-center">
-        <p className="text-sm sm:text-lg text-muted-foreground">
+        <p className="text-xs sm:text-sm lg:text-lg text-muted-foreground">
           {isDrawer ? (
             <span className="text-primary font-semibold animate-pulse">Choose a word to draw!</span>
           ) : (
@@ -46,8 +49,8 @@ export const WordDisplay = ({
   if (phase === 'revealing' || phase === 'roundEnd') {
     return (
       <div className="text-center animate-bounce-in">
-        <p className="text-xs sm:text-sm text-muted-foreground mb-1">The word was:</p>
-        <p className="text-xl sm:text-3xl font-bold text-game-success">{word}</p>
+        <p className="text-xs text-muted-foreground mb-0.5 sm:mb-1">The word was:</p>
+        <p className="text-lg sm:text-2xl lg:text-3xl font-bold text-game-success">{word}</p>
       </div>
     );
   }
@@ -56,15 +59,19 @@ export const WordDisplay = ({
   if (phase === 'gameEnd') {
     return (
       <div className="text-center">
-        <p className="text-xl sm:text-2xl font-bold text-primary">Game Over!</p>
+        <p className="text-lg sm:text-xl lg:text-2xl font-bold text-primary">Game Over!</p>
       </div>
     );
   }
 
   // Drawing phase - drawer sees word, others see blanks or revealed word if guessed
+  // Parse hint to show revealed letters
+  const hintChars = hint.split('');
+  const wordLength = word?.length || hint.replace(/ /g, '').length;
+  
   return (
-    <div className="text-center">
-      <p className="text-xs sm:text-sm text-muted-foreground mb-1 sm:mb-2">
+    <div className="text-center px-2">
+      <p className="text-[10px] sm:text-xs text-muted-foreground mb-0.5 sm:mb-1">
         {isDrawer ? (
           <span className="text-primary font-semibold">Your word:</span>
         ) : hasGuessedCorrectly ? (
@@ -74,39 +81,45 @@ export const WordDisplay = ({
         )}
       </p>
       
-      <div className="flex items-center justify-center gap-1 sm:gap-2 flex-wrap max-w-full px-2">
+      <div className="flex items-center justify-center gap-0.5 sm:gap-1 flex-wrap max-w-full">
         {isDrawer || hasGuessedCorrectly ? (
           // Show full word to drawer or correct guessers
           <span className={cn(
-            "text-xl sm:text-3xl font-bold",
+            "text-base sm:text-xl lg:text-2xl font-bold tracking-wide",
             hasGuessedCorrectly ? "text-game-success" : "text-primary"
           )}>
             {word}
           </span>
         ) : (
-          // Show blanks to guessers
-          <div className="flex gap-0.5 sm:gap-1 flex-wrap justify-center">
-            {hint.split('').map((char, i) => (
-              <span
-                key={i}
-                className={cn(
-                  "flex items-center justify-center text-lg sm:text-2xl font-bold rounded-md sm:rounded-lg",
-                  char === '_' 
-                    ? "w-5 h-6 sm:w-8 sm:h-10 bg-muted border-b-2 sm:border-b-4 border-primary" 
-                    : char === ' ' 
-                    ? "w-2 sm:w-4 bg-transparent" 
-                    : "w-5 h-6 sm:w-8 sm:h-10 bg-primary/20 text-primary"
-                )}
-              >
-                {char === '_' ? '' : char === ' ' ? '' : char}
-              </span>
-            ))}
+          // Show blanks with any revealed hints to guessers
+          <div className="flex gap-[2px] sm:gap-1 flex-wrap justify-center">
+            {hintChars.map((char, i) => {
+              const isSpace = char === ' ';
+              const isRevealed = char !== '_' && char !== ' ';
+              
+              return (
+                <span
+                  key={i}
+                  className={cn(
+                    "flex items-center justify-center font-bold rounded transition-all",
+                    isSpace 
+                      ? "w-1.5 sm:w-3 bg-transparent" 
+                      : isRevealed
+                      ? "w-4 h-5 sm:w-6 sm:h-8 lg:w-8 lg:h-10 bg-primary/20 text-primary text-sm sm:text-lg lg:text-xl"
+                      : "w-4 h-5 sm:w-6 sm:h-8 lg:w-8 lg:h-10 bg-muted border-b-2 sm:border-b-3 border-primary"
+                  )}
+                >
+                  {isRevealed ? char : ''}
+                </span>
+              );
+            })}
           </div>
         )}
       </div>
       
+      {/* Word length info for guessers */}
       {!isDrawer && !hasGuessedCorrectly && word && (
-        <p className="text-xs text-muted-foreground mt-1 sm:mt-2">
+        <p className="text-[10px] sm:text-xs text-muted-foreground mt-0.5 sm:mt-1">
           {word.length} letters {word.includes(' ') ? `(${word.split(' ').map(w => w.length).join(', ')})` : ''}
         </p>
       )}

@@ -10,7 +10,7 @@ import { VoiceControls } from '@/components/game/VoiceControls';
 import { useDrawingSync } from '@/hooks/useDrawingSync';
 import { Button } from '@/components/ui/button';
 import { Sheet, SheetContent, SheetTrigger } from '@/components/ui/sheet';
-import { MessageSquare, Users, ChevronUp } from 'lucide-react';
+import { MessageSquare, Users } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 interface GameScreenProps {
@@ -59,6 +59,7 @@ export const GameScreen = ({
   const [receivedDrawingData, setReceivedDrawingData] = useState<DrawingData | null>(null);
   const [showMobileChat, setShowMobileChat] = useState(false);
   const [showMobilePlayers, setShowMobilePlayers] = useState(false);
+  const [clearTrigger, setClearTrigger] = useState(0);
 
   // Get current drawer's name
   const currentDrawer = players.find(p => p.id === gameState.currentDrawerId);
@@ -87,6 +88,13 @@ export const GameScreen = ({
       return () => clearTimeout(timer);
     }
   }, [receivedDrawingData]);
+
+  // Clear canvas when drawer changes (new turn)
+  useEffect(() => {
+    if (gameState.phase === 'wordSelection') {
+      setClearTrigger(prev => prev + 1);
+    }
+  }, [gameState.currentDrawerId, gameState.phase]);
 
   // Get drawing status message for non-drawers
   const getDrawingStatus = () => {
@@ -126,25 +134,29 @@ export const GameScreen = ({
       />
 
       {/* Main content */}
-      <div className="flex-1 container mx-auto p-2 sm:p-4 flex flex-col lg:grid lg:grid-cols-[1fr_300px] gap-2 sm:gap-4 overflow-hidden">
+      <div className="flex-1 container mx-auto px-2 py-2 sm:p-4 flex flex-col lg:grid lg:grid-cols-[1fr_280px] gap-2 sm:gap-4 overflow-hidden pb-16 lg:pb-4">
         {/* Canvas area */}
         <div className="flex flex-col flex-1 min-h-0">
           {/* Status message for mobile */}
-          <div className="lg:hidden text-center py-2 px-4 bg-card rounded-lg mb-2">
+          <div className="lg:hidden text-center py-1.5 px-3 bg-card rounded-lg mb-2">
             <p className={cn(
-              "text-sm font-medium",
+              "text-xs sm:text-sm font-medium",
               isDrawer ? "text-primary" : hasGuessedCorrectly ? "text-game-success" : "text-muted-foreground"
             )}>
               {getDrawingStatus()}
             </p>
           </div>
           
-          <div className="flex-1 min-h-[300px] sm:min-h-[400px] lg:min-h-[500px]">
-            <DrawingCanvas 
-              isDrawer={isDrawer} 
-              onDrawingData={handleDrawingData}
-              receivedDrawingData={receivedDrawingData}
-            />
+          {/* Canvas with fixed aspect ratio */}
+          <div className="flex-1 flex items-center justify-center min-h-0">
+            <div className="w-full max-w-[800px] h-full max-h-[600px]">
+              <DrawingCanvas 
+                isDrawer={isDrawer} 
+                onDrawingData={handleDrawingData}
+                receivedDrawingData={receivedDrawingData}
+                clearTrigger={clearTrigger}
+              />
+            </div>
           </div>
           
           {/* Mobile quick guess input */}
@@ -161,16 +173,17 @@ export const GameScreen = ({
                   : "Type your guess..."
               }
               hideMessages
+              compact
             />
           </div>
         </div>
 
         {/* Desktop Sidebar */}
-        <div className="hidden lg:flex flex-col gap-4">
+        <div className="hidden lg:flex flex-col gap-3">
           {/* Players */}
-          <div className="bg-card rounded-xl p-4">
-            <h3 className="font-semibold mb-3">Players</h3>
-            <div className="space-y-2 max-h-48 overflow-y-auto">
+          <div className="bg-card rounded-xl p-3">
+            <h3 className="font-semibold mb-2 text-sm">Players</h3>
+            <div className="space-y-1.5 max-h-40 overflow-y-auto">
               {players.map((player) => (
                 <PlayerCard
                   key={player.id}
@@ -188,7 +201,7 @@ export const GameScreen = ({
           </div>
 
           {/* Chat */}
-          <div className="flex-1 min-h-[300px]">
+          <div className="flex-1 min-h-[250px]">
             <ChatBox
               messages={messages}
               onSendMessage={onSendMessage}
@@ -206,17 +219,17 @@ export const GameScreen = ({
       </div>
 
       {/* Mobile bottom bar */}
-      <div className="lg:hidden fixed bottom-0 left-0 right-0 bg-card border-t border-border p-2 flex items-center justify-around gap-2 z-40">
+      <div className="lg:hidden fixed bottom-0 left-0 right-0 bg-card border-t border-border p-2 flex items-center justify-around gap-2 z-40 safe-area-pb">
         {/* Players sheet */}
         <Sheet open={showMobilePlayers} onOpenChange={setShowMobilePlayers}>
           <SheetTrigger asChild>
-            <Button variant="ghost" size="sm" className="flex-1 gap-2">
+            <Button variant="ghost" size="sm" className="flex-1 gap-1.5 h-9">
               <Users className="w-4 h-4" />
               <span className="text-xs">Players ({players.length})</span>
             </Button>
           </SheetTrigger>
-          <SheetContent side="bottom" className="h-[50vh]">
-            <h3 className="font-semibold mb-4">Players</h3>
+          <SheetContent side="bottom" className="h-[50vh] rounded-t-2xl">
+            <h3 className="font-semibold mb-3 text-sm">Players</h3>
             <div className="space-y-2 overflow-y-auto max-h-[calc(50vh-80px)]">
               {players.map((player) => (
                 <PlayerCard
@@ -247,17 +260,17 @@ export const GameScreen = ({
         {/* Chat sheet */}
         <Sheet open={showMobileChat} onOpenChange={setShowMobileChat}>
           <SheetTrigger asChild>
-            <Button variant="ghost" size="sm" className="flex-1 gap-2">
+            <Button variant="ghost" size="sm" className="flex-1 gap-1.5 h-9">
               <MessageSquare className="w-4 h-4" />
               <span className="text-xs">Chat</span>
               {messages.length > 0 && (
-                <span className="bg-primary text-primary-foreground text-xs rounded-full px-1.5">
+                <span className="bg-primary text-primary-foreground text-xs rounded-full px-1.5 min-w-[20px] text-center">
                   {messages.length}
                 </span>
               )}
             </Button>
           </SheetTrigger>
-          <SheetContent side="bottom" className="h-[60vh]">
+          <SheetContent side="bottom" className="h-[60vh] rounded-t-2xl">
             <div className="h-full">
               <ChatBox
                 messages={messages}

@@ -1036,23 +1036,27 @@ export const useMultiplayerGame = () => {
 
         const newTime = prev.timeRemaining - 1;
         
-        // Auto reveal hints at 60% and 30% time (if hints enabled)
-        let newHint = prev.wordHint;
-        if (settings.showHints && prev.wordHint && 
-            (newTime === Math.floor(prev.drawTime * 0.6) || 
-             newTime === Math.floor(prev.drawTime * 0.3))) {
-          const currentRevealedCount = prev.wordHint.split('').filter(c => c !== '_' && c !== ' ').length;
-          // We can't reveal actual letters since we don't have the word on client
-          // Just update the time
-        }
-
         const newState = {
           ...prev,
-          timeRemaining: newTime,
-          wordHint: newHint
+          timeRemaining: newTime
         };
 
+        // Update game state on server
         updateGameState(newState);
+        
+        // Reveal hints at specific time thresholds (60%, 40%, 20%)
+        const timePercentage = newTime / prev.drawTime;
+        if (settings.showHints && 
+            (Math.abs(timePercentage - 0.6) < 0.02 || 
+             Math.abs(timePercentage - 0.4) < 0.02 || 
+             Math.abs(timePercentage - 0.2) < 0.02)) {
+          callSignaling('reveal-hint', {
+            roomId,
+            playerId,
+            timeRemaining: newTime,
+            drawTime: prev.drawTime
+          });
+        }
 
         return newState;
       });
